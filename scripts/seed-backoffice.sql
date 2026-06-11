@@ -2,7 +2,11 @@
 -- Idempotent: safe to run multiple times.
 -- Targets the local Docker Postgres on port 15433.
 
--- Data center entry pointing at the local DC API
+-- Data center entry pointing at the local DC API.
+-- Local dev uses http://localhost:8080. In a k3s pseudo-DC deployment the
+-- api_url is the in-cluster service DNS name of that DC's API, e.g.
+--   http://silkstrand-api.dc-us.svc.cluster.local:8080
+-- (no trailing slash; NormalizeBaseURL validates/trims it on write).
 INSERT INTO data_centers (id, name, region, api_url, api_key_encrypted, status) VALUES (
   '00000000-0000-0000-0000-000000000050',
   'Local Dev DC',

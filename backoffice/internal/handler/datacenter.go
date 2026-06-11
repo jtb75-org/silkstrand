@@ -108,6 +108,12 @@ func (h *DataCenterHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	apiURL, err := dcclient.NormalizeBaseURL(req.APIURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid api_url: "+err.Error())
+		return
+	}
+
 	if len(h.encKey) == 0 {
 		writeError(w, http.StatusInternalServerError, "encryption key not configured")
 		return
@@ -124,7 +130,7 @@ func (h *DataCenterHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:            req.Name,
 		Region:          req.Region,
 		Environment:     env,
-		APIURL:          req.APIURL,
+		APIURL:          apiURL,
 		APIKeyEncrypted: encrypted,
 	})
 	if err != nil {
@@ -170,7 +176,12 @@ func (h *DataCenterHandler) Update(w http.ResponseWriter, r *http.Request) {
 		existing.Environment = *req.Environment
 	}
 	if req.APIURL != nil {
-		existing.APIURL = *req.APIURL
+		apiURL, err := dcclient.NormalizeBaseURL(*req.APIURL)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid api_url: "+err.Error())
+			return
+		}
+		existing.APIURL = apiURL
 	}
 	if req.APIKey != nil {
 		if len(h.encKey) == 0 {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jtb75/silkstrand/backoffice/internal/model"
@@ -15,6 +17,36 @@ import (
 type DCConn struct {
 	APIURL string
 	APIKey string
+}
+
+// NormalizeBaseURL validates and canonicalizes a data center API base URL.
+//
+// It accepts both in-cluster service DNS (e.g.
+// "http://silkstrand-api.dc-us.svc.cluster.local:8080") and public https URLs.
+// The returned value carries no trailing slash, so callers can safely
+// concatenate "/internal/v1/..." without producing a double slash that would
+// 404 against the DC router.
+func NormalizeBaseURL(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("api_url is empty")
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("api_url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("api_url scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("api_url must include a host")
+	}
+	// Trim trailing slashes from the path so path joins don't double up;
+	// drop query/fragment which are never meaningful on a base URL.
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 // Client is an HTTP client for communicating with data center APIs.
@@ -53,13 +85,13 @@ func (c *Client) do(method, url string, body any, conn DCConn) (*http.Response, 
 }
 
 // HealthCheck performs a health check against the data center API.
-// Uses /readyz instead of /healthz because Cloud Run intercepts /healthz
-// (it's configured as the probe path) — external requests to /healthz
-// return a Google-served 404 without reaching the container.
+// Uses /readyz (not /healthz) so the check exercises the DC's real
+// dependencies (DB + Redis), not just process liveness.
 //
-// Parses the JSON response and requires status=="ok" so a Cloud Run service
-// serving the default placeholder ("Congratulations" HTML) is not reported
-// as healthy.
+// Parses the JSON response and requires status=="ok" so a service that is
+// reachable but serving an unrelated placeholder body (e.g. an ingress
+// default backend, or a stale Cloud Run revision pre-migration) is not
+// reported as healthy.
 func (c *Client) HealthCheck(conn DCConn) error {
 	resp, err := c.http.Get(conn.APIURL + "/readyz")
 	if err != nil {
