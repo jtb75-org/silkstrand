@@ -31,6 +31,16 @@ func main() {
 		Level: slog.LevelInfo,
 	})))
 
+	// Subcommands run a one-shot task and exit instead of starting the server.
+	// `register-dc` is the worker behind the k3s gitops DC-registration Job.
+	if len(os.Args) > 1 && os.Args[1] == "register-dc" {
+		if err := registerDC(os.Args[2:]); err != nil {
+			slog.Error("fatal", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)

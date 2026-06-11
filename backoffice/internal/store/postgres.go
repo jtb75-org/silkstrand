@@ -83,6 +83,26 @@ func (s *PostgresStore) GetDataCenter(ctx context.Context, id string) (*model.Da
 	return &dc, nil
 }
 
+// GetDataCenterByName returns the data center with the given name, or nil if
+// none exists. Used by the register-dc bootstrap command for idempotency
+// (name is the registration key). If several rows share a name, the most
+// recently created is returned.
+func (s *PostgresStore) GetDataCenterByName(ctx context.Context, name string) (*model.DataCenter, error) {
+	var dc model.DataCenter
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, region, environment, api_url, api_key_encrypted, status, last_health_check, last_health_status, created_at, updated_at
+		 FROM data_centers WHERE name = $1 ORDER BY created_at DESC LIMIT 1`, name).
+		Scan(&dc.ID, &dc.Name, &dc.Region, &dc.Environment, &dc.APIURL, &dc.APIKeyEncrypted,
+			&dc.Status, &dc.LastHealthCheck, &dc.LastHealthStatus, &dc.CreatedAt, &dc.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting data center by name: %w", err)
+	}
+	return &dc, nil
+}
+
 func (s *PostgresStore) CreateDataCenter(ctx context.Context, dc model.DataCenter) (*model.DataCenter, error) {
 	env := dc.Environment
 	if env == "" {

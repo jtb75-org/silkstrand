@@ -12,6 +12,7 @@ type Store interface {
 	// Data Centers
 	ListDataCenters(ctx context.Context) ([]model.DataCenter, error)
 	GetDataCenter(ctx context.Context, id string) (*model.DataCenter, error)
+	GetDataCenterByName(ctx context.Context, name string) (*model.DataCenter, error)
 	CreateDataCenter(ctx context.Context, dc model.DataCenter) (*model.DataCenter, error)
 	UpdateDataCenter(ctx context.Context, id string, dc model.DataCenter) (*model.DataCenter, error)
 	DeleteDataCenter(ctx context.Context, id string) error
