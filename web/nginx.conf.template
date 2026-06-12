@@ -1,6 +1,11 @@
 server {
     listen ${PORT};
-    resolver 8.8.8.8 ipv6=off;
+    # Cluster CoreDNS (kube-dns ClusterIP). nginx resolves the proxy_pass
+    # upstreams below at request time (they use variables), so this resolver
+    # MUST be able to resolve in-cluster names like
+    # backoffice-api.silkstrand-backoffice.svc.cluster.local. The old public
+    # 8.8.8.8 worked only when the upstreams were public Cloud Run URLs.
+    resolver 10.43.0.10 ipv6=off;
     root /usr/share/nginx/html;
     index index.html;
 
