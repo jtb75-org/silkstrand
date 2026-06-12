@@ -1,6 +1,6 @@
 # ADR 014: DNS-name (virtual-host) discovery
 
-**Status:** Proposed
+**Status:** Proposed (open questions resolved 2026-06-12 — see *Resolved decisions* below)
 **Date:** 2026-06-12
 **Related:** [ADR 003](./003-recon-pipeline.md) (recon pipeline — naabu→httpx→nuclei,
 scan allowlist D11 — resolution/policy stays in the customer network),
@@ -64,15 +64,20 @@ SilkStrand discover, model, and scan each as its own thing.
 
 ### D1. A virtual host is a first-class asset, keyed on the name
 
-Introduce a web/service asset identity keyed on **`(tenant_id, hostname, port)`**
-rather than collapsing to IP. Concretely: a new `resource_type` (proposed
-`http_service`) with its own **partial unique index** on
-`(tenant_id, lower(hostname), port) WHERE hostname IS NOT NULL`, parallel to the
-existing IP index. The resolved IP(s) are recorded as **attributes**
-(fingerprint / a join), not as the identity — so twenty names on one ingress IP
-are twenty assets that *share* a `primary_ip`, and the topology view can render
-the fan-out ("these 20 sites all sit on 10.0.0.5"). This is the load-bearing
-decision: without it, every later step re-collapses to one IP-keyed row.
+Introduce a **new `resource_type = http_service`** (resolves Q1 — a dedicated
+type, *not* a relaxation of the IP index, so host assets stay exactly as they
+are) with its own **partial unique index** on
+`(tenant_id, lower(hostname)) WHERE resource_type = 'http_service'`, parallel to
+the existing IP index. The name is the asset; **ports are endpoints under it**
+(resolves Q2 — consistent with ADR 006's asset / `asset_endpoints` split, so
+`app.example.com:443` and `:8443` are two `asset_endpoints` of one site asset,
+not two assets). The resolved IP(s) are recorded as **attributes**
+(fingerprint / a cross-link), not as the identity — so twenty names on one
+ingress IP are twenty assets that *share* a `primary_ip`, and the topology view
+can render the fan-out ("these 20 sites all sit on 10.0.0.5"). This is the
+load-bearing decision: without it, every later step re-collapses to one IP-keyed
+row. A discovered host (IP) and a website (name) that happen to share an IP are
+**distinct assets that cross-link**, never merged.
 
 ### D2. A DNS-name import surface
 
@@ -124,6 +129,26 @@ file remains the final, customer-owned authority. No name is ever scanned
 because it was uploaded — only because the allowlist authorizes it. This keeps
 the "data never leaves / customer owns scope" posture intact.
 
+### D8. Wildcards are an allowlist pattern, never a synthesized asset
+
+An uploaded `*.example.com` (resolves Q3) becomes an **allowlist authorization
+pattern only** — it authorizes concrete matching names but creates **no asset**,
+because there is no concrete name to resolve or probe and a fabricated asset
+would be a lie (an asset means a real, probed site). Concrete names under a
+wildcard arrive one of two ways: an explicit import of the names, or observation
+(D9). This keeps "an asset == something we actually scanned" honest.
+
+### D9. Cert-SAN / SNI observation suggests names (fast-follow, log-only)
+
+During ordinary IP scans httpx already retrieves the TLS certificate, whose
+**SANs are a free, authoritative list of real vhost names on that IP** (and an
+SNI-based redirect reveals another). When a scan observes such a name that is
+not yet imported, emit a **log-only `suggest_dns_name`** signal (mirroring
+ADR 006's `suggest_target` — surfaced, never auto-added; the customer still
+imports it through D2). This is the bridge that makes D8 wildcards actionable
+and turns the IP-scan and name-scan worlds into a feedback loop. It is **fast-
+follow (v1.1)**, deliberately out of the v1 cut to keep v1 lean (resolves Q4).
+
 ## Consequences
 
 - **Closes the ingress/reverse-proxy/k8s surface** — the most common shape for
@@ -139,31 +164,33 @@ the "data never leaves / customer owns scope" posture intact.
 - **Nice topology payoff** — shared-IP fan-out becomes visible, and dangling DNS
   (name resolves, nothing answers) becomes a first-class finding.
 
-## Open questions
+## Resolved decisions
 
-1. **New `resource_type` vs. relax the IP-only unique index?** A dedicated
-   `http_service` type is cleaner and keeps host assets untouched; relaxing the
-   index is less code but blurs "host" and "site." (Leaning new type.)
-2. **Port in the identity?** Is `app.example.com:443` distinct from `:8443`, or
-   is the site the name and ports are endpoints under it (mirroring
-   `asset_endpoints`)? (Leaning: name = asset, ports = endpoints — consistent
-   with ADR 006.)
-3. **Wildcards** — does an uploaded `*.example.com` expand (needs a name source)
-   or stay a single allowlist pattern with no asset until a concrete name is
-   observed? (Leaning: pattern-only; concrete names come from explicit import or
-   observed SNI/SAN.)
-4. **Auto-seeding** — should IP scans that observe a **cert SAN** or an SNI
-   redirect *suggest* names back into the import (log-only, à la ADR 006
-   `suggest_target`)? High-value, but a later phase.
-5. **Cloud-DNS / CT-log import** — pulling a Route53 / Cloudflare zone or
-   certificate-transparency logs to populate the list automatically. Clearly
-   valuable, clearly out of v1 scope.
+The questions this ADR opened with are now resolved and folded into the
+decisions above:
+
+1. **`resource_type` vs. relaxing the IP index** → **new `http_service` type**
+   (D1). Keeps host assets untouched; adds a name axis beside the IP axis.
+2. **Port in the identity** → **no** (D1). The name is the asset; ports are
+   `asset_endpoints`, per ADR 006. Unique index is `(tenant_id, lower(hostname))`.
+3. **Wildcards** → **allowlist pattern only, no synthesized asset** (D8).
+   Concrete names come from explicit import or observation (D9).
+4. **Cert-SAN / SNI auto-seeding** → **yes, but fast-follow (v1.1), log-only**
+   (D9) — the bridge that makes wildcards actionable; held out of v1 to keep it
+   lean.
+5. **Cloud-DNS / CT-log import** → **deferred, post-v1** (see below). Each is a
+   separate integration; CT-log seeding additionally needs a **data-egress**
+   decision, since querying public CT logs discloses customer hostnames to a
+   third party — so it must be opt-in and clearly flagged, not a default.
 
 ## Scope / phasing
 
 - **v1 (lean):** import DNS names → proposed allowlist hostname entries
-  (ADR 013 plumbing) → hostname-keyed `http_service` assets (D1) → vhost-aware
-  httpx with SNI/`Host` (D3) → per-vhost findings (D6). Scope via a Collection or
-  `dns_list` (D4).
-- **Later:** cloud-DNS zone pull, wildcard expansion, CT-log seeding, and
-  cert/SNI-observed name auto-suggestion (open questions 3–5).
+  (ADR 013 plumbing, D2) → hostname-keyed `http_service` assets (D1) →
+  vhost-aware httpx with SNI/`Host` (D3) → per-vhost findings (D6). Scope via a
+  Collection or `dns_list` (D4). Wildcards authorize but don't synthesize (D8).
+- **v1.1 (fast-follow):** cert-SAN / SNI-observed name **auto-suggestion** (D9) —
+  closes the IP-scan ↔ name-scan loop and populates names under D8 wildcards.
+- **Later:** cloud-DNS zone pull (Route53 / Cloudflare — an ADR 004-style
+  credential-source integration) and **opt-in** CT-log seeding (with the
+  data-egress flag above).
