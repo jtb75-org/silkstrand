@@ -1,6 +1,6 @@
 # ADR 013: Guided agent rollout — Deploy → Discover → Prove
 
-**Status:** Proposed
+**Status:** Accepted (PRs #353–#357 merged 2026-06-12)
 **Date:** 2026-06-12
 **Related:** [ADR 003](./003-recon-pipeline.md) (recon pipeline — `EnsureTool`,
 scan allowlist D11), [ADR 006](./006-asset-first-data-model.md) (assets +
