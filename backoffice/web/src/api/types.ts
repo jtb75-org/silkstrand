@@ -133,6 +133,32 @@ export interface UserDetail extends User {
   pending_invites: UserPendingInvite[];
 }
 
+// Tenant detail — Users tab (backoffice admin view of one tenant)
+
+export interface TenantMember {
+  user_id: string;
+  email: string;
+  role: 'admin' | 'member';
+  status: 'active' | 'suspended';
+  created_at: string;
+}
+
+export interface TenantPendingInvite {
+  id: string;
+  email: string;
+  role: 'admin' | 'member';
+  expires_at: string;
+  created_at: string;
+}
+
+// Returned by create/resend invite. `status === 'invited'` (create) or a
+// 204/void (resend) means the email was sent; any other status means the
+// invite was mutated but delivery did NOT happen (email disabled or failed).
+export interface InviteSendResult {
+  status: string;
+  error?: string;
+}
+
 export interface AuditEntry {
   id: string;
   occurred_at: string;

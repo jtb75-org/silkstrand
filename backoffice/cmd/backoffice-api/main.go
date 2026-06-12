@@ -159,6 +159,11 @@ func run() error {
 	apiMux.HandleFunc("PUT /api/v1/tenants/{id}/status", tenantH.UpdateStatus)
 	apiMux.HandleFunc("POST /api/v1/tenants/{id}/retry", tenantH.Retry)
 	apiMux.HandleFunc("DELETE /api/v1/tenants/{id}", tenantH.Delete)
+	apiMux.HandleFunc("GET /api/v1/tenants/{id}/members", tenantH.ListMembers)
+	apiMux.HandleFunc("GET /api/v1/tenants/{id}/invites", tenantH.ListInvites)
+	apiMux.HandleFunc("POST /api/v1/tenants/{id}/invites", tenantH.CreateInvite)
+	apiMux.HandleFunc("POST /api/v1/tenants/{id}/invites/{inviteId}/resend", tenantH.ResendInvite)
+	apiMux.HandleFunc("DELETE /api/v1/tenants/{id}/invites/{inviteId}", tenantH.DeleteInvite)
 
 	apiMux.HandleFunc("GET /api/v1/users", userH.List)
 	apiMux.HandleFunc("GET /api/v1/users/{id}", userH.Get)
