@@ -35,9 +35,19 @@ func runNaabu(ctx context.Context, target string, ratePPS int, onFinding func(Na
 	}
 	// SYN scan is the default and needs CAP_NET_RAW. When the agent runs
 	// in an unprivileged container, set SILKSTRAND_NAABU_SCAN_TYPE=c to
-	// use CONNECT mode instead (works without raw sockets, slightly slower).
+	// use CONNECT mode instead (works without raw sockets).
 	if st := os.Getenv("SILKSTRAND_NAABU_SCAN_TYPE"); st != "" {
 		args = append(args, "-scan-type", st)
+		if st == "c" {
+			// CONNECT scan blocks on the per-connection timeout for every
+			// dead host:port (SYN fires-and-forgets), so a sparse CIDR is
+			// dominated by dead-host timeouts — a /24 took ~6 min with the
+			// defaults (3 retries x 1000ms x low concurrency). Trim retries,
+			// shorten the timeout, and raise concurrency: tuned for the
+			// low-latency internal targets the agent scans, where a live host
+			// answers well under 700ms.
+			args = append(args, "-retries", "1", "-timeout", "700", "-c", "100")
+		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	stdout, err := cmd.StdoutPipe()
