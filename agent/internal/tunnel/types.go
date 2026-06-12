@@ -99,8 +99,12 @@ type AssetDiscoveredPayload struct {
 
 // DiscoveredAssetUpsert is one normalized asset finding.
 type DiscoveredAssetUpsert struct {
-	IP           string          `json:"ip"`
-	Port         int             `json:"port"`
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+	// ResourceType is "http_service" for a vhost probed by name (SNI/Host) so
+	// the server keys it on the hostname, not the shared ingress IP (ADR 014
+	// D3). Empty → the default host (IP-keyed) behavior.
+	ResourceType string          `json:"resource_type,omitempty"`
 	Hostname     string          `json:"hostname,omitempty"`
 	Service      string          `json:"service,omitempty"`
 	Version      string          `json:"version,omitempty"`
