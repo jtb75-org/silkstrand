@@ -1,9 +1,31 @@
 package recon
 
 import (
+	"context"
 	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestStartProgress(t *testing.T) {
+	var calls atomic.Int64
+	stop := startProgress(context.Background(), 5*time.Millisecond, "test", func() []any {
+		calls.Add(1)
+		return []any{"n", calls.Load()}
+	})
+	time.Sleep(45 * time.Millisecond) // ~9 ticks
+	stop()
+	time.Sleep(20 * time.Millisecond) // let the goroutine exit
+	got := calls.Load()
+	if got < 2 {
+		t.Fatalf("expected several progress calls, got %d", got)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if calls.Load() != got {
+		t.Errorf("calls continued after stop: %d -> %d", got, calls.Load())
+	}
+}
 
 func TestClassifyTarget(t *testing.T) {
 	cases := []struct {
