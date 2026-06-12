@@ -42,22 +42,35 @@ func NewPostgresStore(databaseURL string) (*PostgresStore, error) {
 }
 
 // pingWithRetry pings the database until it succeeds or maxWait elapses, using
-// capped exponential backoff. It returns the last ping error on timeout so the
-// caller still surfaces the underlying cause.
+// capped exponential backoff. The whole operation — including each individual
+// ping and every backoff sleep — is bounded by a single context deadline, so a
+// connection that stalls or blackholes in the driver/TCP stack cannot hang past
+// maxWait. It returns the last ping error on timeout so the caller still
+// surfaces the underlying cause.
 func pingWithRetry(db *sql.DB, maxWait time.Duration) error {
-	deadline := time.Now().Add(maxWait)
+	ctx, cancel := context.WithTimeout(context.Background(), maxWait)
+	defer cancel()
+
 	backoff := 500 * time.Millisecond
 	for attempt := 1; ; attempt++ {
-		err := db.Ping()
+		err := db.PingContext(ctx)
 		if err == nil {
 			return nil
 		}
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil {
 			return err
 		}
 		slog.Warn("database not ready, retrying",
 			"attempt", attempt, "backoff", backoff.String(), "error", err)
-		time.Sleep(backoff)
+		// Sleep up to backoff, but wake as soon as the deadline passes so the
+		// final wait never overshoots maxWait.
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return err
+		case <-timer.C:
+		}
 		if backoff < 5*time.Second {
 			backoff *= 2
 		}
