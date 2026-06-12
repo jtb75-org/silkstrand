@@ -3,9 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jtb75/silkstrand/api/internal/model"
@@ -256,6 +260,178 @@ func (h *AssetHandler) GetEndpoint(w http.ResponseWriter, r *http.Request) {
 func (h *AssetHandler) Promote(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusNotImplemented,
 		"asset promote is superseded by scan_definitions (scope=asset_endpoint); P3")
+}
+
+const maxImportDNSNames = 1000
+
+// ImportDNS bulk-imports operator-supplied DNS names as http_service assets
+// (ADR 014 D2). Each name is normalized + validated; concrete names become
+// name-keyed http_service assets, wildcards (`*.example.com`) are returned as
+// allowlist patterns only (no asset — D8). The response includes the
+// `allowlist_entries` the operator must add to the agent's allowlist for any of
+// this to actually scan (the host file stays authoritative — D7).
+//
+// POST /api/v1/assets/import-dns   body: {"names": ["app.example.com", ...]}
+func (h *AssetHandler) ImportDNS(w http.ResponseWriter, r *http.Request) {
+	tenantID := store.TenantID(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Names) == 0 {
+		writeError(w, http.StatusBadRequest, "names is required")
+		return
+	}
+	if len(req.Names) > maxImportDNSNames {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many names (max %d)", maxImportDNSNames))
+		return
+	}
+
+	imported := []map[string]any{}
+	wildcards := []string{}
+	skipped := []map[string]string{}
+	allowlist := map[string]bool{} // concrete names + wildcard patterns, deduped
+	seenConcrete := map[string]bool{}
+	seenWildcard := map[string]bool{}
+
+	for _, raw := range req.Names {
+		name, wildcard, reason := normalizeDNSName(raw)
+		if reason != "" {
+			skipped = append(skipped, map[string]string{"input": strings.TrimSpace(raw), "reason": reason})
+			continue
+		}
+		allowlist[name] = true
+		if wildcard {
+			if !seenWildcard[name] {
+				seenWildcard[name] = true
+				wildcards = append(wildcards, name)
+			}
+			continue
+		}
+		if seenConcrete[name] {
+			continue
+		}
+		seenConcrete[name] = true
+		a, err := h.store.UpsertAsset(r.Context(), store.UpsertAssetInput{
+			TenantID:     tenantID,
+			Hostname:     name,
+			ResourceType: model.ResourceTypeHTTPService,
+			Source:       "imported",
+		})
+		if err != nil {
+			slog.Error("import-dns: upserting asset", "name", name, "error", err)
+			skipped = append(skipped, map[string]string{"input": name, "reason": "failed to create asset"})
+			continue
+		}
+		imported = append(imported, map[string]any{"name": name, "asset_id": a.ID})
+	}
+
+	entries := make([]string, 0, len(allowlist))
+	for e := range allowlist {
+		entries = append(entries, e)
+	}
+	sort.Strings(entries)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"imported":          imported,
+		"wildcards":         wildcards,
+		"skipped":           skipped,
+		"allowlist_entries": entries,
+	})
+}
+
+// normalizeDNSName cleans an operator-supplied DNS name into a bare hostname:
+// strips scheme / userinfo / path / port / trailing dot and lowercases, then
+// validates hostname syntax. A leading `*.` marks a wildcard (an allowlist
+// pattern, never an asset — ADR 014 D8). A non-empty reason means the input was
+// rejected (and is reported back to the operator).
+func normalizeDNSName(s string) (name string, wildcard bool, reason string) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return "", false, "empty"
+	}
+	if i := strings.Index(s, "://"); i >= 0 { // scheme
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?#"); i >= 0 { // path / query / fragment
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 { // userinfo
+		s = s[i+1:]
+	}
+	// Strip a trailing :port only when it is genuinely numeric, so malformed
+	// inputs (host:notaport, host:, foo:bar) are rejected rather than silently
+	// truncated to a valid-looking host. A host that still contains ':' here is
+	// a bare IPv6 literal — leave it for the IP check below.
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		host, port := s[:i], s[i+1:]
+		switch {
+		case strings.Contains(host, ":"): // bare IPv6, not host:port
+		case isNumericPort(port):
+			s = host
+		default:
+			return "", false, "invalid host:port"
+		}
+	}
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		return "", false, "no hostname after cleanup"
+	}
+	if net.ParseIP(s) != nil {
+		return "", false, "looks like an IP — use CIDR discovery instead"
+	}
+	if rest, ok := strings.CutPrefix(s, "*."); ok {
+		if !validHostname(rest) {
+			return "", true, "invalid wildcard hostname"
+		}
+		return s, true, ""
+	}
+	if !validHostname(s) {
+		return "", false, "invalid hostname"
+	}
+	return s, false, ""
+}
+
+// validHostname checks RFC-1123-ish hostname syntax (labels of a-z0-9-, not
+// edge-hyphenated, ≤63 chars each, ≤253 total).
+func validHostname(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(h, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			alnumDash := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
+			if !alnumDash {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isNumericPort reports whether p is a valid 1–65535 TCP port (digits only).
+func isNumericPort(p string) bool {
+	if p == "" || len(p) > 5 {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < '0' || p[i] > '9' {
+			return false
+		}
+	}
+	n, _ := strconv.Atoi(p)
+	return n >= 1 && n <= 65535
 }
 
 // flattenAsset spreads the model.Asset fields at the top level and adds

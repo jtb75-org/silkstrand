@@ -7,8 +7,10 @@ import {
   listCollections,
   createCollection,
   listScans,
+  importDNSNames,
   type AssetFilterParams,
   type AssetEndpointRow,
+  type ImportDNSResult,
 } from '../api/client';
 import type {
   CVE,
@@ -139,6 +141,11 @@ export default function Assets() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saveOpen, setSaveOpen] = useState(false);
 
+  // ADR 014 D2: import DNS names → http_service assets.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importResult, setImportResult] = useState<ImportDNSResult | null>(null);
+
   const filters: AssetFilterParams = useMemo(
     () => ({
       ...chipsToParams(chips),
@@ -150,6 +157,16 @@ export default function Assets() {
   );
 
   const qc = useQueryClient();
+
+  const importMutation = useMutation({
+    mutationFn: () =>
+      importDNSNames(importText.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean)),
+    onSuccess: (res) => {
+      setImportResult(res);
+      qc.invalidateQueries({ queryKey: ['assets'] });
+    },
+  });
+
   const { data: assets, isLoading, error } = useQuery({
     queryKey: ['assets', filters, collectionId],
     queryFn: () => listAssets(filters),
@@ -262,6 +279,9 @@ export default function Assets() {
         <button className="btn btn-sm" onClick={() => setSaveOpen(true)}>
           Save as Collection
         </button>
+        <button className="btn btn-sm" onClick={() => { setImportResult(null); setImportOpen(true); }}>
+          Import DNS names
+        </button>
       </div>
 
       <AssetsFilterChips
@@ -316,6 +336,66 @@ export default function Assets() {
           seedPredicate={filtersToPredicate(filters)}
           onClose={() => setSaveOpen(false)}
         />
+      )}
+
+      {importOpen && (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <div className="form-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Import DNS names</h3>
+            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+              Discover websites behind a shared ingress / reverse proxy. Each name
+              becomes its own asset (a <code>*.example.com</code> wildcard authorizes
+              but creates no asset). Paste one per line.
+            </p>
+            <textarea
+              rows={7}
+              placeholder={'app.example.com\napi.example.com\n*.internal.example.com'}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              style={{ width: '100%', fontFamily: 'monospace', fontSize: 13 }}
+            />
+            {importResult && (
+              <div style={{ marginTop: 12, fontSize: 13 }}>
+                <p style={{ margin: '0 0 6px' }}>
+                  <strong>{importResult.imported.length}</strong> imported
+                  {importResult.wildcards.length > 0 && <>, <strong>{importResult.wildcards.length}</strong> wildcard(s)</>}
+                  {importResult.skipped.length > 0 && <>, <strong>{importResult.skipped.length}</strong> skipped</>}.
+                </p>
+                {importResult.skipped.length > 0 && (
+                  <ul className="muted" style={{ margin: '0 0 8px', paddingLeft: 18 }}>
+                    {importResult.skipped.map((s, i) => (
+                      <li key={i}><code>{s.input}</code> — {s.reason}</li>
+                    ))}
+                  </ul>
+                )}
+                {importResult.allowlist_entries.length > 0 && (
+                  <>
+                    <p style={{ margin: '8px 0 4px' }}>
+                      Add these to the agent's <code>scan-allowlist.yaml</code> so they
+                      actually scan (the host file is authoritative):
+                    </p>
+                    <pre style={{ background: '#f3f4f6', padding: 10, borderRadius: 6, userSelect: 'all', overflowX: 'auto', margin: 0 }}>
+{'allow:\n' + importResult.allowlist_entries.map((e) => `  - ${e}`).join('\n')}
+                    </pre>
+                  </>
+                )}
+              </div>
+            )}
+            {importMutation.error && (
+              <p className="error">{(importMutation.error as Error).message}</p>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setImportOpen(false)}>Close</button>
+              <button
+                className="btn btn-primary"
+                disabled={importMutation.isPending || !importText.trim()}
+                onClick={() => importMutation.mutate()}
+              >
+                {importMutation.isPending ? 'Importing…' : 'Import'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {selectedAssetId && (

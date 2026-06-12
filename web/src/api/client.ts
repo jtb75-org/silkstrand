@@ -214,6 +214,21 @@ export const promoteAsset = (id: string, bundleId: string) =>
     body: JSON.stringify({ bundle_id: bundleId }),
   });
 
+// ADR 014 D2: bulk-import DNS names as http_service assets. Concrete names
+// become assets; wildcards are allowlist patterns only; allowlist_entries are
+// what the operator must add to the agent allowlist for these to scan.
+export interface ImportDNSResult {
+  imported: { name: string; asset_id: string }[];
+  wildcards: string[];
+  skipped: { input: string; reason: string }[];
+  allowlist_entries: string[];
+}
+export const importDNSNames = (names: string[]) =>
+  request<ImportDNSResult>('/api/v1/assets/import-dns', {
+    method: 'POST',
+    body: JSON.stringify({ names }),
+  });
+
 // Asset endpoints — flat per-port list for the Endpoints tab.
 export interface AssetEndpointRow {
   id: string;
