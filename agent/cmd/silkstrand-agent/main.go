@@ -108,6 +108,9 @@ func main() {
 	bundleCache := cache.New(cfg.BundleDir, publicKey)
 	pythonRunner := runner.NewPythonRunner()
 	tun := tunnel.New(cfg.APIURL, cfg.AgentID, cfg.AgentKey)
+	// Report container-ness in heartbeats so the UI offers image-recreate
+	// instead of the in-place upgrade containers can't do (ADR 013 follow-up).
+	tun.InContainer = updater.InContainer()
 
 	// Install the dual-handler slog stack per ADR 008 D1: stdout keeps
 	// every level (debug stays local per D2), tunnel ships info+ only

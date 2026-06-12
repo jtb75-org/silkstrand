@@ -57,6 +57,9 @@ export default function Agents() {
   const [newKey, setNewKey] = useState<{ agent: Agent; apiKey: string } | null>(null);
   const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
   const [consoleFor, setConsoleFor] = useState<Agent | null>(null);
+  // Container agents can't self-upgrade in place — the action recreates the
+  // container from the new image instead (ADR 013 follow-up).
+  const [recreateFor, setRecreateFor] = useState<Agent | null>(null);
 
   // Allowed targets seed the agent's scan-allowlist via --allow-cidr (ADR 013
   // D2). The host file stays the source of truth; this just saves the initial
@@ -439,18 +442,29 @@ export default function Agents() {
                     Allowlist
                   </button>
                   {a.status === 'connected' && (
-                    <button
-                      className="btn btn-sm"
-                      style={{ marginRight: 6 }}
-                      disabled={upgradeMutation.isPending}
-                      onClick={() => {
-                        if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
-                          upgradeMutation.mutate(a.id);
-                        }
-                      }}
-                    >
-                      Upgrade
-                    </button>
+                    a.in_container ? (
+                      <button
+                        className="btn btn-sm"
+                        style={{ marginRight: 6 }}
+                        title="Container agents upgrade by recreating from the new image"
+                        onClick={() => setRecreateFor(a)}
+                      >
+                        Recreate from image
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        style={{ marginRight: 6 }}
+                        disabled={upgradeMutation.isPending}
+                        onClick={() => {
+                          if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
+                            upgradeMutation.mutate(a.id);
+                          }
+                        }}
+                      >
+                        Upgrade
+                      </button>
+                    )
                   )}
                   <button
                     className="btn btn-sm"
@@ -488,6 +502,30 @@ export default function Agents() {
 
       {consoleFor && (
         <ConsoleDrawer agent={consoleFor} onClose={() => setConsoleFor(null)} />
+      )}
+
+      {recreateFor && (
+        <div className="modal-backdrop" onClick={() => setRecreateFor(null)}>
+          <div className="form-card" style={{ maxWidth: 600 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Recreate {recreateFor.name} from the new image</h3>
+            <p style={{ marginTop: 0 }}>
+              <strong>{recreateFor.name}</strong> runs as a container, so it can't
+              swap its own binary in place. Upgrade it by pulling the new image and
+              recreating the container — run this on the host where it runs:
+            </p>
+            <CodeBlock
+              content={`curl -sSL ${installScriptURL || 'https://downloads.silkstrand.io/agent/install-agent.sh'} | sudo sh -s -- \\\n  --mode=docker --upgrade --version=${downloads?.version ?? 'latest'}`}
+            />
+            <p className="muted" style={{ fontSize: 13 }}>
+              Credentials, networks, and proxy/CA settings carry over from the
+              existing container — no re-bootstrap. The agent reconnects on the new
+              version within ~30s.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setRecreateFor(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {overlapPreview && (

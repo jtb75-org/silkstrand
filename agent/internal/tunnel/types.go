@@ -158,4 +158,7 @@ type ScanErrorPayload struct {
 type HeartbeatPayload struct {
 	Version       string `json:"version"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
+	// InContainer tells the server this agent runs in a container, where the
+	// in-place self-upgrade path is unsupported (ADR 013 follow-up).
+	InContainer bool `json:"in_container"`
 }

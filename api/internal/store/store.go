@@ -46,7 +46,7 @@ type Store interface {
 	GetAgentByID(ctx context.Context, id string) (*model.Agent, error)
 	CreateAgent(ctx context.Context, req model.CreateAgentRequest) (*model.Agent, string, error)
 	UpdateAgentStatus(ctx context.Context, id, status string) error
-	UpdateAgentHeartbeat(ctx context.Context, id, version string) error
+	UpdateAgentHeartbeat(ctx context.Context, id, version string, inContainer bool) error
 	RotateAgentKey(ctx context.Context, id string) (string, error)
 	PromoteAgentKey(ctx context.Context, id string) error
 	ListAgents(ctx context.Context) ([]model.Agent, error)
