@@ -72,8 +72,15 @@ func (r *scanDefRequest) validateScope() error {
 		if r.AssetEndpointID != nil || r.CollectionID != nil || (r.CIDR != nil && *r.CIDR != "") {
 			return errors.New("scope=agent_allowlist must not set asset_endpoint_id, collection_id, or cidr")
 		}
+	case model.ScanDefinitionScopeDNSList:
+		if r.AgentID == nil || *r.AgentID == "" {
+			return errors.New("scope=dns_list requires agent_id")
+		}
+		if r.AssetEndpointID != nil || r.CollectionID != nil || (r.CIDR != nil && *r.CIDR != "") {
+			return errors.New("scope=dns_list must not set asset_endpoint_id, collection_id, or cidr")
+		}
 	default:
-		return errors.New("scope_kind must be asset_endpoint | collection | cidr | agent_allowlist")
+		return errors.New("scope_kind must be asset_endpoint | collection | cidr | agent_allowlist | dns_list")
 	}
 	return nil
 }

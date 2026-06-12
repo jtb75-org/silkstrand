@@ -442,6 +442,10 @@ const (
 	// the agent currently reports in its scan-allowlist snapshot (ADR 013 D4).
 	// Resolved at dispatch time; requires agent_id.
 	ScanDefinitionScopeAgentAllowlist = "agent_allowlist"
+	// ScanDefinitionScopeDNSList scopes a discovery scan to the tenant's
+	// imported http_service hostnames (ADR 014 D4). Resolved at dispatch — one
+	// vhost-aware directive per name; requires agent_id.
+	ScanDefinitionScopeDNSList = "dns_list"
 )
 
 // ----- Findings (ADR 007 D1) -------------------------------------
