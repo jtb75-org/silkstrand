@@ -42,6 +42,11 @@ export default function Agents() {
     queryFn: getAgentDownloads,
   });
 
+  // Install-script URL comes from the DC's downloads endpoint (single source of
+  // truth, driven by the server's AGENT_RELEASES_URL) — never hardcode it, or
+  // it drifts from where releases are actually published.
+  const installScriptURL = downloads?.install_script ?? '';
+
   const [installToken, setInstallToken] = useState<{ token: string; expiresAt: string } | null>(null);
   const [newKey, setNewKey] = useState<{ agent: Agent; apiKey: string } | null>(null);
   const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
@@ -79,10 +84,6 @@ export default function Agents() {
     },
   });
 
-  // Install-script URL comes from the DC's downloads endpoint (single source of
-  // truth, driven by the server's AGENT_RELEASES_URL) — never hardcode it, or
-  // it drifts from where releases are actually published.
-  const installScriptURL = downloads?.install_script ?? '';
   const oneLiner = installToken && apiURL && installScriptURL
     ? `curl -sSL ${installScriptURL} | sudo sh -s -- \\
   --token=${installToken.token} \\
@@ -106,16 +107,21 @@ export default function Agents() {
         </p>
         <button
           className="btn btn-primary"
-          disabled={tokenMutation.isPending || !apiURL}
+          disabled={tokenMutation.isPending || !apiURL || !installScriptURL}
           onClick={() => tokenMutation.mutate()}
         >
           {tokenMutation.isPending ? 'Generating…' : 'Generate install command'}
         </button>
+        {!installScriptURL && (
+          <p className="muted" style={{ fontSize: 13 }}>
+            Loading the agent release location…
+          </p>
+        )}
         {tokenMutation.error && (
           <p className="error">{(tokenMutation.error as Error).message}</p>
         )}
 
-        {installToken && (
+        {installToken && oneLiner && (
           <>
             <p className="muted" style={{ marginTop: 16 }}>
               Copy and run on the host (requires sudo). Expires{' '}
