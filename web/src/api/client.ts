@@ -561,10 +561,13 @@ export const getAgentLogs = (agentId: string, params?: {
     `/api/v1/agents/${agentId}/logs${qs ? `?${qs}` : ''}`,
   );
 };
-export const createInstallToken = () =>
+export const createInstallToken = (opts?: {
+  auto_discover?: boolean;
+  discover_schedule?: 'off' | 'daily' | 'weekly';
+}) =>
   request<{ install_token: string; expires_at: string }>('/api/v1/agents/install-tokens', {
     method: 'POST',
-    body: '{}',
+    body: JSON.stringify(opts ?? {}),
   });
 
 // Credentials (per-target)

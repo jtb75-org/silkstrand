@@ -452,10 +452,10 @@ func (s *PostgresStore) CreateAgent(ctx context.Context, req model.CreateAgentRe
 	}
 	var a model.Agent
 	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO agents (tenant_id, name, version, key_hash)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO agents (tenant_id, name, version, key_hash, auto_discover_pending, discover_cron)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, tenant_id, name, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at`,
-		req.TenantID, req.Name, req.Version, keyHash).
+		req.TenantID, req.Name, req.Version, keyHash, req.AutoDiscoverPending, req.DiscoverCron).
 		Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version,
 			&a.KeyHash, &a.NextKeyHash, &a.KeyRotatedAt, &a.CreatedAt)
 	if err != nil {
@@ -580,36 +580,56 @@ func (s *PostgresStore) DeleteAgent(ctx context.Context, id string) error {
 // Install tokens
 // ======================================================================
 
-func (s *PostgresStore) CreateInstallToken(ctx context.Context, tenantID string, tokenHash []byte, expiresAt time.Time, createdBy string) error {
+func (s *PostgresStore) CreateInstallToken(ctx context.Context, in CreateInstallTokenInput) error {
 	var createdByArg interface{}
-	if createdBy != "" {
-		createdByArg = createdBy
+	if in.CreatedBy != "" {
+		createdByArg = in.CreatedBy
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO install_tokens (token_hash, tenant_id, created_by, expires_at)
-		 VALUES ($1, $2, $3, $4)`,
-		tokenHash, tenantID, createdByArg, expiresAt)
+		`INSERT INTO install_tokens (token_hash, tenant_id, created_by, expires_at, auto_discover, discover_cron)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		in.TokenHash, in.TenantID, createdByArg, in.ExpiresAt, in.AutoDiscover, in.DiscoverCron)
 	if err != nil {
 		return fmt.Errorf("creating install token: %w", err)
 	}
 	return nil
 }
 
-func (s *PostgresStore) ConsumeInstallToken(ctx context.Context, tokenHash []byte, agentID string) (string, error) {
-	var tenantID string
+func (s *PostgresStore) ConsumeInstallToken(ctx context.Context, tokenHash []byte, agentID string) (*ConsumedInstallToken, error) {
+	var out ConsumedInstallToken
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE install_tokens
 		   SET used_at = NOW(), used_agent_id = $2
 		 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-		 RETURNING tenant_id`,
-		tokenHash, agentID).Scan(&tenantID)
+		 RETURNING tenant_id, auto_discover, discover_cron`,
+		tokenHash, agentID).Scan(&out.TenantID, &out.AutoDiscover, &out.DiscoverCron)
 	if err == sql.ErrNoRows {
-		return "", sql.ErrNoRows
+		return nil, sql.ErrNoRows
 	}
 	if err != nil {
-		return "", fmt.Errorf("consuming install token: %w", err)
+		return nil, fmt.Errorf("consuming install token: %w", err)
 	}
-	return tenantID, nil
+	return &out, nil
+}
+
+// ClaimAutoDiscover atomically clears the agent's pending auto-discover flag
+// and returns whether it was set plus the recurring cron (ADR 013 D5). The
+// WHERE auto_discover_pending guard makes this fire-once under concurrent
+// snapshot reports.
+func (s *PostgresStore) ClaimAutoDiscover(ctx context.Context, agentID string) (bool, *string, error) {
+	var cron *string
+	err := s.db.QueryRowContext(ctx,
+		`UPDATE agents SET auto_discover_pending = FALSE
+		 WHERE id = $1 AND auto_discover_pending = TRUE
+		 RETURNING discover_cron`,
+		agentID).Scan(&cron)
+	if err == sql.ErrNoRows {
+		return false, nil, nil
+	}
+	if err != nil {
+		return false, nil, fmt.Errorf("claiming auto-discover: %w", err)
+	}
+	return true, cron, nil
 }
 
 // ======================================================================

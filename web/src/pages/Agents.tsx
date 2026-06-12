@@ -67,8 +67,13 @@ export default function Agents() {
     setAllowCidrs((a) => a.map((x, j) => (j === i ? v : x)));
   const removeAllow = (i: number) => setAllowCidrs((a) => a.filter((_, j) => j !== i));
 
+  // Auto-discover on connect (ADR 013 D5). Recurring is opt-in, default Off.
+  const [autoDiscover, setAutoDiscover] = useState(true);
+  const [discoverSchedule, setDiscoverSchedule] = useState<'off' | 'daily' | 'weekly'>('off');
+
   const tokenMutation = useMutation({
-    mutationFn: createInstallToken,
+    mutationFn: () =>
+      createInstallToken({ auto_discover: autoDiscover, discover_schedule: discoverSchedule }),
     onSuccess: (res) => setInstallToken({ token: res.install_token, expiresAt: res.expires_at }),
   });
 
@@ -163,6 +168,36 @@ export default function Agents() {
             Seeds the agent's scan allowlist (CIDR, IP, range, or hostname). You can
             edit it later on the host or via the <strong>Allowlist</strong> button below.
             Leave empty to configure it on the host instead.
+          </p>
+        </div>
+
+        <div style={{ margin: '12px 0 16px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={autoDiscover}
+              onChange={(e) => setAutoDiscover(e.target.checked)}
+            />
+            <span style={{ fontWeight: 600 }}>Run discovery as soon as it connects</span>
+          </label>
+          {autoDiscover && (
+            <div style={{ marginTop: 6, marginLeft: 24, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="muted" style={{ fontSize: 13 }}>then repeat:</span>
+              {(['off', 'daily', 'weekly'] as const).map((opt) => (
+                <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                  <input
+                    type="radio"
+                    name="discover-schedule"
+                    checked={discoverSchedule === opt}
+                    onChange={() => setDiscoverSchedule(opt)}
+                  />
+                  {opt === 'off' ? 'Off' : opt === 'daily' ? 'Daily' : 'Weekly'}
+                </label>
+              ))}
+            </div>
+          )}
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Discovers across the allowed targets once the agent connects — no scan to set up.
           </p>
         </div>
 

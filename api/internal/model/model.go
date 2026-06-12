@@ -66,6 +66,10 @@ type CreateAgentRequest struct {
 	TenantID string `json:"tenant_id"`
 	Name     string `json:"name"`
 	Version  string `json:"version,omitempty"`
+	// ADR 013 D5: auto-discover intent copied from the install token at
+	// bootstrap; consumed (fire-once) on the agent's first allowlist snapshot.
+	AutoDiscoverPending bool    `json:"-"`
+	DiscoverCron        *string `json:"-"`
 }
 
 // AgentLogEvent is a persisted agent log line. Partition key is occurred_at.
