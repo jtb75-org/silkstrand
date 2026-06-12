@@ -83,7 +83,7 @@ Originally each data center was a full regional deployment so EU data stayed in 
 | DNS / ingress | Cloudflare + cloudflared + traefik + cert-manager | DNS + tunnel + ingress + TLS, domain: silkstrand.io |
 | Auth (tenant) | In-house: bcrypt + HS256 JWT | Users + memberships live in the backoffice; DCs validate JWTs with a shared `TENANT_JWT_SECRET`. |
 | Auth (admin) | In-house: bcrypt + JWT | Backoffice admin login (separate from tenant users). |
-| Transactional email | Resend | Invitations, password resets. Pluggable `mailer.Mailer` interface. |
+| Transactional email | SMTP → AWS SES | Via the in-cluster Postfix `mail-relay` (no SES creds in the app). Invitations, password resets. Pluggable `mailer.Mailer` interface. |
 
 ## Project Structure
 
@@ -213,7 +213,7 @@ Implementation plans live in `docs/plans/ui-shape.md` (asset-first nav + page sh
   - Health poller (60s) monitors all registered data centers
   - Admin JWT auth with role-based access (viewer/admin/super_admin) + bcrypt login
   - **Tenant user auth** (in-house replacement for Clerk): users, memberships, invitations, password_resets tables; HS256 JWT signed with `TENANT_JWT_SECRET` (same secret every DC uses to validate). Endpoints: `/api/v1/tenant-auth/{login,accept-invite,forgot-password,reset-password,me,switch-org,members,invites}`.
-  - **Transactional email** via Resend (`internal/mailer`): invitation emails with single-use tokens, password-reset emails with 1h expiry. Falls back to a noop logger if no API key (local dev).
+  - **Transactional email** via the in-cluster SMTP relay → AWS SES (`internal/mailer`): invitation emails with single-use tokens, password-reset emails with 1h expiry. Sends plain SMTP to the `mail-relay` (which holds the SES creds); falls back to a noop logger when `SMTP_RELAY_ADDR` is unset (local dev).
   - Dashboard with DC health cards, cross-DC tenant management
   - Dockerfile: multi-stage (golang → distroless for API, node → nginx for web)
 - **CI/CD** — GitHub Actions on **self-hosted ARC runners** (`jtb75-arc`, autoscaling min1/max4). `build-and-push.yml`: push to main / `workflow_dispatch` → a `Detect Changes` job (paths-filter, runs in the `atlas/builder` container) gates four **kaniko** build jobs → push `zot.lan.ng20.org/silkstrand-{api,web,backoffice-api,backoffice-web}:sha-<short>` (+ `:main-latest`) → a `Bump GitOps Image Tags` job seds the `newTag` in `silkstrand-gitops` and pushes → Argo CD syncs. Build-once-promote-by-SHA preserved. `ci.yml` (PR lint/test/build-verify) remains; `destroy.yml`, `release-agent.yml`, `release-pd-tools.yml` remain. Old GCP `deploy-stage.yml`/`deploy-prod.yml` retired.
@@ -584,7 +584,7 @@ curl -s localhost:8080/api/v1/scans/<scan_id> -H "Authorization: Bearer $TOKEN" 
 | `ENCRYPTION_KEY` | (none) | 64 hex chars for DC API key encryption. In-cluster: OpenBao `secret/silkstrand/backoffice/encryption-key` via ESO. |
 | `DC_INTERNAL_API_KEY` | (none) | API key the backoffice uses to call each DC's `/internal/v1/`. In-cluster: OpenBao `secret/silkstrand/dc/<region>/internal-api-key` (same path the DC reads as `INTERNAL_API_KEY`). |
 | `TENANT_JWT_SECRET` | `dev-secret-change-in-production` | HS256 signing key for tenant user JWTs. Must match DC's `JWT_SECRET`. In-cluster: OpenBao `secret/silkstrand/shared/tenant-jwt` via ESO. |
-| `RESEND_API_KEY` | (none) | Resend transactional email API key. Empty = noop mailer (logs to stdout). In-cluster: OpenBao `secret/silkstrand/backoffice/resend` via ESO. |
+| `SMTP_RELAY_ADDR` | (none) | host:port of the in-cluster SMTP relay → SES (e.g. `mail-relay.mail.svc.cluster.local:25`). Empty = noop mailer (logs to stdout). No SES creds needed — the relay holds them. |
 | `FROM_EMAIL` | `SilkStrand <noreply@silkstrand.io>` | From address for invites / password resets |
 | `TENANT_WEB_URL` | `http://localhost:5173` | Base URL used to build invite / reset links in emails |
 
@@ -610,7 +610,7 @@ CI only needs registry + GitOps credentials now; all **application** secrets liv
 - `ZOT_PASSWORD` — zot registry password
 - `GITOPS_DEPLOY_TOKEN` — write token for the `jtb75-org/silkstrand-gitops` repo (the `Bump GitOps Image Tags` job pushes `newTag` updates)
 
-App secrets (`JWT_SECRET`, `INTERNAL_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, backoffice `JWT`/`ENCRYPTION_KEY`/`RESEND_API_KEY`/bootstrap-admin, shared `TENANT_JWT_SECRET`) now live in OpenBao under `secret/silkstrand/*` and reach the cluster via ESO — no longer GitHub Actions secrets. The old GCP/WIF, Upstash, and per-env JWT/credential-key secrets are gone.
+App secrets (`JWT_SECRET`, `INTERNAL_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, backoffice `JWT`/`ENCRYPTION_KEY`/bootstrap-admin, shared `TENANT_JWT_SECRET`) now live in OpenBao under `secret/silkstrand/*` and reach the cluster via ESO — no longer GitHub Actions secrets. (Transactional email no longer needs a secret — the in-cluster SMTP relay holds the SES creds; the backoffice just sets `SMTP_RELAY_ADDR`.) The old GCP/WIF, Upstash, and per-env JWT/credential-key secrets are gone.
 
 ### Variables
 - (none required for deploy — WIF provider/SA variables removed; deploy is Argo CD GitOps, not GitHub→GCP)

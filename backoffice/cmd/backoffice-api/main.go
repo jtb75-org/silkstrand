@@ -74,12 +74,12 @@ func run() error {
 
 	// Email sender for tenant invites and password resets.
 	var tenantMailer mailer.Mailer
-	if cfg.ResendAPIKey != "" {
-		tenantMailer = mailer.NewResend(cfg.ResendAPIKey, cfg.FromEmail)
-		slog.Info("mailer: Resend enabled", "from", cfg.FromEmail)
+	if cfg.SMTPRelayAddr != "" {
+		tenantMailer = mailer.NewSMTP(cfg.SMTPRelayAddr, cfg.FromEmail)
+		slog.Info("mailer: SMTP relay enabled", "addr", cfg.SMTPRelayAddr, "from", cfg.FromEmail)
 	} else {
 		tenantMailer = mailer.Noop{}
-		slog.Info("mailer: noop (no RESEND_API_KEY set; emails will be logged only)")
+		slog.Info("mailer: noop (no SMTP_RELAY_ADDR set; emails will be logged only)")
 	}
 
 	// Handlers
