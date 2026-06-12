@@ -594,11 +594,19 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 // Returns isNewAsset=true when this is the first time we've seen the
 // host (ie. first_seen == created_at after the upsert).
 func upsertHostAsset(ctx context.Context, s store.Store, tenantID string, a websocket.DiscoveredAssetUpsert) (*model.Asset, bool, error) {
+	// A vhost probed by name (ADR 014 D3) keys on the hostname, not the shared
+	// ingress IP — primary_ip becomes the resolved attribute. Everything else
+	// keeps the host (IP-keyed) identity.
+	resourceType := a.ResourceType
+	if resourceType == model.ResourceTypeHTTPService && a.Hostname == "" {
+		return nil, false, fmt.Errorf("http_service discovery missing hostname")
+	}
 	asset, err := s.UpsertAsset(ctx, store.UpsertAssetInput{
-		TenantID:  tenantID,
-		PrimaryIP: a.IP,
-		Hostname:  a.Hostname,
-		Source:    model.AssetSourceDiscovered,
+		TenantID:     tenantID,
+		PrimaryIP:    a.IP,
+		Hostname:     a.Hostname,
+		ResourceType: resourceType,
+		Source:       model.AssetSourceDiscovered,
 	})
 	if err != nil {
 		return nil, false, err

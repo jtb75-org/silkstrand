@@ -93,8 +93,12 @@ type AssetDiscoveredPayload struct {
 // DiscoveredAssetUpsert is one normalized asset finding the agent
 // streams up. JSONB-shaped fields are pass-through.
 type DiscoveredAssetUpsert struct {
-	IP           string          `json:"ip"`
-	Port         int             `json:"port"`
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+	// ResourceType is "http_service" when the agent probed this by name
+	// (SNI/Host); the server then keys the asset on the hostname rather than the
+	// shared ingress IP (ADR 014 D3). Empty → default host (IP-keyed).
+	ResourceType string          `json:"resource_type,omitempty"`
 	Hostname     string          `json:"hostname,omitempty"`
 	Service      string          `json:"service,omitempty"`
 	Version      string          `json:"version,omitempty"`

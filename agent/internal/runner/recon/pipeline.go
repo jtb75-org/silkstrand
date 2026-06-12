@@ -103,9 +103,20 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	httpxBatcher := NewBatcher(req.ScanID, "httpx", req.Emit, cfg.BatchSize, 2*time.Second)
 	defer httpxBatcher.Stop()
 
+	// When the directive targets a hostname, probe each open port BY NAME so
+	// httpx sets SNI + Host and we see the actual vhost behind a shared ingress,
+	// not its default backend — and the resulting asset is keyed on the name
+	// (ADR 014 D3). naabu still emitted the IP-keyed host asset above; the two
+	// cross-link by IP.
+	isHostname := classifyTarget(req.TargetIdentifier) == targetHostname
+
 	httpInputs := make([]string, 0, len(findings))
 	for _, f := range findings {
-		httpInputs = append(httpInputs, fmt.Sprintf("%s:%d", f.IP, f.Port))
+		host := f.IP
+		if isHostname {
+			host = req.TargetIdentifier
+		}
+		httpInputs = append(httpInputs, fmt.Sprintf("%s:%d", host, f.Port))
 	}
 	var (
 		httpxMu       sync.Mutex
@@ -118,14 +129,21 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 		urls = append(urls, f.URL)
 		httpxMu.Unlock()
 		tech, _ := json.Marshal(f.Technologies)
-		httpxBatcher.Add(tunnel.DiscoveredAssetUpsert{
+		up := tunnel.DiscoveredAssetUpsert{
 			IP:           f.IP,
 			Port:         f.Port,
 			Hostname:     f.Host,
 			Service:      strings.ToLower(f.WebServer),
 			Technologies: tech,
 			ObservedAt:   now,
-		})
+		}
+		if isHostname {
+			up.ResourceType = resourceTypeHTTPService
+			if up.Hostname == "" {
+				up.Hostname = req.TargetIdentifier
+			}
+		}
+		httpxBatcher.Add(up)
 	}
 	slog.InfoContext(ctx, "httpx: fingerprinting services", "scan_id", req.ScanID, "inputs", len(httpInputs))
 	if err := runHTTPX(ctx, httpInputs, httpxOnFinding); err != nil {
@@ -161,12 +179,19 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 		}
 		cveByEndpoint[key] = append(cveByEndpoint[key], entry)
 		raw, _ := json.Marshal(cveByEndpoint[key])
-		nucleiBatcher.Add(tunnel.DiscoveredAssetUpsert{
+		up := tunnel.DiscoveredAssetUpsert{
 			IP:         ip,
 			Port:       port,
 			CVEs:       raw,
 			ObservedAt: now,
-		})
+		}
+		if isHostname {
+			// Attach the CVE to the vhost asset (keyed on name), not the
+			// IP-keyed host, so findings land on the right site (ADR 014 D3).
+			up.ResourceType = resourceTypeHTTPService
+			up.Hostname = req.TargetIdentifier
+		}
+		nucleiBatcher.Add(up)
 	}
 	nucleiURLs := dedupe(urls)
 	slog.InfoContext(ctx, "nuclei: scanning for vulnerabilities", "scan_id", req.ScanID, "urls", len(nucleiURLs))
@@ -181,20 +206,47 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
 }
 
+// Target kinds for a discovery directive's TargetIdentifier.
+const (
+	targetCIDR     = "cidr"
+	targetRange    = "range"
+	targetIP       = "ip"
+	targetHostname = "hostname"
+
+	resourceTypeHTTPService = "http_service" // wire value mirrors api model.ResourceTypeHTTPService
+)
+
+// classifyTarget distinguishes a CIDR, an IP range (IP-IP), a single IP, and a
+// hostname. A range requires IPs on *both* sides of the dash, so a hyphenated
+// hostname (my-app.example.com) is no longer misread as a range.
+func classifyTarget(t string) string {
+	t = strings.TrimSpace(t)
+	if strings.Contains(t, "/") {
+		return targetCIDR
+	}
+	if i := strings.Index(t, "-"); i > 0 {
+		if net.ParseIP(strings.TrimSpace(t[:i])) != nil && net.ParseIP(strings.TrimSpace(t[i+1:])) != nil {
+			return targetRange
+		}
+	}
+	if net.ParseIP(t) != nil {
+		return targetIP
+	}
+	return targetHostname
+}
+
 // vetTargetAgainstAllowlist enforces D11 before any subprocess spawns.
 // Hostname targets are resolved; every resolved IP must pass.
 func vetTargetAgainstAllowlist(target string, allow *Allowlist) error {
 	t := strings.TrimSpace(target)
-	switch {
-	case strings.Contains(t, "/"):
+	switch classifyTarget(t) {
+	case targetCIDR:
 		if !allow.AllowsCIDR(t) {
 			return fmt.Errorf("allowlist_violation: %s", t)
 		}
 		return nil
-	case strings.Contains(t, "-"):
-		// IP range: walk endpoints, reject if either is denied or
-		// neither endpoint is allowed (cheap heuristic; tighter check
-		// could enumerate every IP in the range).
+	case targetRange:
+		// Cheap heuristic: reject if either endpoint is denied or unallowed.
 		i := strings.Index(t, "-")
 		from := strings.TrimSpace(t[:i])
 		to := strings.TrimSpace(t[i+1:])
@@ -202,24 +254,23 @@ func vetTargetAgainstAllowlist(target string, allow *Allowlist) error {
 			return fmt.Errorf("allowlist_violation: %s", t)
 		}
 		return nil
-	}
-	if ip := net.ParseIP(t); ip != nil {
+	case targetIP:
 		if !allow.Allows(t) {
 			return fmt.Errorf("allowlist_violation: %s", t)
 		}
 		return nil
-	}
-	// Hostname.
-	ips, err := net.LookupIP(t)
-	if err != nil || len(ips) == 0 {
-		return fmt.Errorf("allowlist_violation: cannot resolve %s", t)
-	}
-	for _, ip := range ips {
-		if !allow.Allows(ip.String()) {
-			return fmt.Errorf("allowlist_violation: %s resolved to disallowed %s", t, ip)
+	default: // hostname — resolve and check every resolved IP.
+		ips, err := net.LookupIP(t)
+		if err != nil || len(ips) == 0 {
+			return fmt.Errorf("allowlist_violation: cannot resolve %s", t)
 		}
+		for _, ip := range ips {
+			if !allow.Allows(ip.String()) {
+				return fmt.Errorf("allowlist_violation: %s resolved to disallowed %s", t, ip)
+			}
+		}
+		return nil
 	}
-	return nil
 }
 
 // firstCVE picks a stable single id for the CVEs JSONB array entry.
