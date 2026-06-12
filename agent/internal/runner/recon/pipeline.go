@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sort"
 	"strings"
@@ -67,10 +68,10 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	defer naabuBatcher.Stop()
 
 	var (
-		naabuMu       sync.Mutex
-		findings      []NaabuFinding
-		hostsSeen     = map[string]struct{}{}
-		now           = time.Now().UTC().Format(time.RFC3339)
+		naabuMu   sync.Mutex
+		findings  []NaabuFinding
+		hostsSeen = map[string]struct{}{}
+		now       = time.Now().UTC().Format(time.RFC3339)
 	)
 	naabuOnFinding := func(f NaabuFinding) {
 		naabuMu.Lock()
@@ -84,11 +85,15 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 			ObservedAt: now,
 		})
 	}
+	slog.Info("naabu: port-scanning target", "scan_id", req.ScanID,
+		"target", req.TargetIdentifier, "rate_pps", pps)
 	if err := runNaabu(ctx, req.TargetIdentifier, pps, naabuOnFinding); err != nil {
 		naabuBatcher.Flush()
 		return nil, err
 	}
 	naabuBatcher.Flush()
+	slog.Info("naabu: complete", "scan_id", req.ScanID,
+		"open_ports", len(findings), "hosts", len(hostsSeen))
 
 	if !cfg.IncludeHTTPX {
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
@@ -122,11 +127,13 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 			ObservedAt:   now,
 		})
 	}
+	slog.Info("httpx: fingerprinting services", "scan_id", req.ScanID, "inputs", len(httpInputs))
 	if err := runHTTPX(ctx, httpInputs, httpxOnFinding); err != nil {
 		httpxBatcher.Flush()
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
 	}
 	httpxBatcher.Flush()
+	slog.Info("httpx: complete", "scan_id", req.ScanID, "http_services", len(httpxFindings))
 
 	if !cfg.IncludeNuclei {
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
@@ -139,11 +146,13 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	defer nucleiBatcher.Stop()
 
 	cveByEndpoint := map[string][]map[string]any{}
+	nucleiHits := 0
 	nucleiOnHit := func(h NucleiHit) {
 		ip, port := splitURLToIPPort(h.URL, httpxFindings)
 		if ip == "" {
 			return
 		}
+		nucleiHits++
 		key := fmt.Sprintf("%s:%d", ip, port)
 		entry := map[string]any{
 			"id":       firstCVE(h.CVEs, h.TemplateID),
@@ -159,12 +168,15 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 			ObservedAt: now,
 		})
 	}
-	if err := runNuclei(ctx, dedupe(urls), nucleiOnHit); err != nil {
+	nucleiURLs := dedupe(urls)
+	slog.Info("nuclei: scanning for vulnerabilities", "scan_id", req.ScanID, "urls", len(nucleiURLs))
+	if err := runNuclei(ctx, nucleiURLs, nucleiOnHit); err != nil {
 		nucleiBatcher.Flush()
 		// Nuclei errors don't sink prior stage results.
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
 	}
 	nucleiBatcher.Flush()
+	slog.Info("nuclei: complete", "scan_id", req.ScanID, "findings", nucleiHits)
 
 	return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
 }
