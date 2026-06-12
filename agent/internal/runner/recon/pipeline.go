@@ -85,14 +85,14 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 			ObservedAt: now,
 		})
 	}
-	slog.Info("naabu: port-scanning target", "scan_id", req.ScanID,
+	slog.InfoContext(ctx, "naabu: port-scanning target", "scan_id", req.ScanID,
 		"target", req.TargetIdentifier, "rate_pps", pps)
 	if err := runNaabu(ctx, req.TargetIdentifier, pps, naabuOnFinding); err != nil {
 		naabuBatcher.Flush()
 		return nil, err
 	}
 	naabuBatcher.Flush()
-	slog.Info("naabu: complete", "scan_id", req.ScanID,
+	slog.InfoContext(ctx, "naabu: complete", "scan_id", req.ScanID,
 		"open_ports", len(findings), "hosts", len(hostsSeen))
 
 	if !cfg.IncludeHTTPX {
@@ -127,13 +127,13 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 			ObservedAt:   now,
 		})
 	}
-	slog.Info("httpx: fingerprinting services", "scan_id", req.ScanID, "inputs", len(httpInputs))
+	slog.InfoContext(ctx, "httpx: fingerprinting services", "scan_id", req.ScanID, "inputs", len(httpInputs))
 	if err := runHTTPX(ctx, httpInputs, httpxOnFinding); err != nil {
 		httpxBatcher.Flush()
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
 	}
 	httpxBatcher.Flush()
-	slog.Info("httpx: complete", "scan_id", req.ScanID, "http_services", len(httpxFindings))
+	slog.InfoContext(ctx, "httpx: complete", "scan_id", req.ScanID, "http_services", len(httpxFindings))
 
 	if !cfg.IncludeNuclei {
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
@@ -169,14 +169,14 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 		})
 	}
 	nucleiURLs := dedupe(urls)
-	slog.Info("nuclei: scanning for vulnerabilities", "scan_id", req.ScanID, "urls", len(nucleiURLs))
+	slog.InfoContext(ctx, "nuclei: scanning for vulnerabilities", "scan_id", req.ScanID, "urls", len(nucleiURLs))
 	if err := runNuclei(ctx, nucleiURLs, nucleiOnHit); err != nil {
 		nucleiBatcher.Flush()
 		// Nuclei errors don't sink prior stage results.
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
 	}
 	nucleiBatcher.Flush()
-	slog.Info("nuclei: complete", "scan_id", req.ScanID, "findings", nucleiHits)
+	slog.InfoContext(ctx, "nuclei: complete", "scan_id", req.ScanID, "findings", nucleiHits)
 
 	return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
 }
