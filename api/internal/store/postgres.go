@@ -405,9 +405,9 @@ func (s *PostgresStore) GetAgent(ctx context.Context, id string) (*model.Agent, 
 	tenantID := TenantID(ctx)
 	var a model.Agent
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, in_container, created_at
 		   FROM agents WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt)
+		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.InContainer, &a.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -421,9 +421,9 @@ func (s *PostgresStore) GetAgentByID(ctx context.Context, id string) (*model.Age
 	var a model.Agent
 	var keyHash sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, in_container, key_hash, next_key_hash, key_rotated_at, created_at
 		   FROM agents WHERE id = $1`, id).
-		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version,
+		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.InContainer,
 			&keyHash, &a.NextKeyHash, &a.KeyRotatedAt, &a.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -473,13 +473,23 @@ func (s *PostgresStore) UpdateAgentStatus(ctx context.Context, id, status string
 	return nil
 }
 
-func (s *PostgresStore) UpdateAgentHeartbeat(ctx context.Context, id, version string) error {
+// UpdateAgentHeartbeat refreshes status/heartbeat and, when reported, version
+// and in_container. inContainer is nil for agents predating the field —
+// COALESCE leaves the stored value untouched (stays NULL = unknown) rather than
+// overwriting it with a false the agent never sent (ADR 013 follow-up).
+func (s *PostgresStore) UpdateAgentHeartbeat(ctx context.Context, id, version string, inContainer *bool) error {
 	if version == "" {
-		return s.UpdateAgentStatus(ctx, id, "connected")
+		_, err := s.db.ExecContext(ctx,
+			`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), in_container = COALESCE($1, in_container) WHERE id = $2`,
+			inContainer, id)
+		if err != nil {
+			return fmt.Errorf("updating agent heartbeat: %w", err)
+		}
+		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), version = $1 WHERE id = $2`,
-		version, id)
+		`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), version = $1, in_container = COALESCE($2, in_container) WHERE id = $3`,
+		version, inContainer, id)
 	if err != nil {
 		return fmt.Errorf("updating agent heartbeat: %w", err)
 	}
@@ -523,7 +533,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 		return nil, fmt.Errorf("tenant not set in context")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, in_container, created_at
 		   FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("listing agents: %w", err)
@@ -532,7 +542,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	var out []model.Agent
 	for rows.Next() {
 		var a model.Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.InContainer, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning agent: %w", err)
 		}
 		out = append(out, a)
@@ -542,7 +552,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 
 func (s *PostgresStore) ListAllAgents(ctx context.Context) ([]model.Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, in_container, created_at
 		   FROM agents ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing all agents: %w", err)
@@ -551,7 +561,7 @@ func (s *PostgresStore) ListAllAgents(ctx context.Context) ([]model.Agent, error
 	var agents []model.Agent
 	for rows.Next() {
 		var a model.Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.InContainer, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning agent: %w", err)
 		}
 		agents = append(agents, a)

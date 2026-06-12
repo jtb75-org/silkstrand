@@ -41,6 +41,11 @@ type Tunnel struct {
 	// source using the agent's local network (e.g. on-prem Vault).
 	OnCredentialTest func(CredentialTestPayload)
 
+	// InContainer is reported in every heartbeat so the server/UI can offer
+	// image-recreate instead of in-place upgrade (ADR 013 follow-up). Set once
+	// at startup before the tunnel runs.
+	InContainer bool
+
 	conn   *websocket.Conn
 	sendCh chan Message
 	mu     sync.Mutex
@@ -270,6 +275,7 @@ func (t *Tunnel) sendHeartbeat(version string, startedAt time.Time) {
 	payload := HeartbeatPayload{
 		Version:       version,
 		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
+		InContainer:   t.InContainer,
 	}
 	data, _ := json.Marshal(payload)
 	t.Send(Message{Type: TypeHeartbeat, Payload: data})

@@ -296,6 +296,7 @@ export interface Agent {
   status: 'pending' | 'connected' | 'disconnected' | 'online' | 'offline';
   last_heartbeat?: string;
   version?: string;
+  in_container?: boolean | null; // ADR 013 follow-up: null/undefined = unknown; true = container (recreate); false = binary (in-place)
   created_at: string;
 }
 

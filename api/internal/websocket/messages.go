@@ -126,6 +126,11 @@ type ScanErrorPayload struct {
 type HeartbeatPayload struct {
 	Version       string `json:"version"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
+	// InContainer reports whether the agent runs inside a container, where
+	// in-place self-upgrade is unsupported (ADR 013 follow-up). Pointer so an
+	// agent predating this field (omits it) is distinguishable from one that
+	// reports false — the former leaves the stored value unknown (NULL).
+	InContainer *bool `json:"in_container"`
 }
 
 // CredentialTestPayload is sent from server to agent to test a credential

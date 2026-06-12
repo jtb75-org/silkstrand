@@ -416,7 +416,7 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			if err := json.Unmarshal(msg.Payload, &hb); err != nil {
 				slog.Debug("parsing heartbeat payload", "agent_id", agentID, "error", err)
 			}
-			if err := s.UpdateAgentHeartbeat(ctx, agentID, hb.Version); err != nil {
+			if err := s.UpdateAgentHeartbeat(ctx, agentID, hb.Version, hb.InContainer); err != nil {
 				slog.Error("updating agent heartbeat", "agent_id", agentID, "error", err)
 			}
 

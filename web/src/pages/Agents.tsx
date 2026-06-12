@@ -57,6 +57,9 @@ export default function Agents() {
   const [newKey, setNewKey] = useState<{ agent: Agent; apiKey: string } | null>(null);
   const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
   const [consoleFor, setConsoleFor] = useState<Agent | null>(null);
+  // Container agents can't self-upgrade in place — the action recreates the
+  // container from the new image instead (ADR 013 follow-up).
+  const [recreateFor, setRecreateFor] = useState<Agent | null>(null);
 
   // Allowed targets seed the agent's scan-allowlist via --allow-cidr (ADR 013
   // D2). The host file stays the source of truth; this just saves the initial
@@ -439,18 +442,33 @@ export default function Agents() {
                     Allowlist
                   </button>
                   {a.status === 'connected' && (
-                    <button
-                      className="btn btn-sm"
-                      style={{ marginRight: 6 }}
-                      disabled={upgradeMutation.isPending}
-                      onClick={() => {
-                        if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
-                          upgradeMutation.mutate(a.id);
-                        }
-                      }}
-                    >
-                      Upgrade
-                    </button>
+                    a.in_container === false ? (
+                      // Positively known binary install → in-place self-upgrade.
+                      <button
+                        className="btn btn-sm"
+                        style={{ marginRight: 6 }}
+                        disabled={upgradeMutation.isPending}
+                        onClick={() => {
+                          if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
+                            upgradeMutation.mutate(a.id);
+                          }
+                        }}
+                      >
+                        Upgrade
+                      </button>
+                    ) : (
+                      // Container (true) → recreate; unknown (null/undefined,
+                      // e.g. agents predating mode reporting) → modal offers both
+                      // rather than guessing in-place and silently failing.
+                      <button
+                        className="btn btn-sm"
+                        style={{ marginRight: 6 }}
+                        title={a.in_container ? 'Container agents upgrade by recreating from the new image' : "This agent's deployment mode isn't known yet"}
+                        onClick={() => setRecreateFor(a)}
+                      >
+                        {a.in_container ? 'Recreate from image' : 'Upgrade…'}
+                      </button>
+                    )
                   )}
                   <button
                     className="btn btn-sm"
@@ -488,6 +506,52 @@ export default function Agents() {
 
       {consoleFor && (
         <ConsoleDrawer agent={consoleFor} onClose={() => setConsoleFor(null)} />
+      )}
+
+      {recreateFor && (
+        <div className="modal-backdrop" onClick={() => setRecreateFor(null)}>
+          <div className="form-card" style={{ maxWidth: 600 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Upgrade {recreateFor.name}</h3>
+            {recreateFor.in_container ? (
+              <p style={{ marginTop: 0 }}>
+                <strong>{recreateFor.name}</strong> runs as a container, so it can't
+                swap its own binary in place. Upgrade it by pulling the new image and
+                recreating the container — run this on the host where it runs:
+              </p>
+            ) : (
+              <p style={{ marginTop: 0 }}>
+                We haven't detected this agent's deployment mode yet (it predates mode
+                reporting). Choose the path that matches how it was installed:
+              </p>
+            )}
+            <p style={{ margin: '12px 0 4px', fontWeight: 600, fontSize: 14 }}>Container (docker)</p>
+            <CodeBlock
+              content={`curl -sSL ${installScriptURL || 'https://downloads.silkstrand.io/agent/install.sh'} | sudo sh -s -- \\\n  --mode=docker --upgrade --version=${downloads?.version ?? 'latest'}`}
+            />
+            <p className="muted" style={{ fontSize: 13 }}>
+              Credentials, networks, and proxy/CA settings carry over from the
+              existing container — no re-bootstrap. Reconnects on the new version in ~30s.
+            </p>
+            {recreateFor.in_container !== true && (
+              <>
+                <p style={{ margin: '16px 0 6px', fontWeight: 600, fontSize: 14 }}>Binary install</p>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={upgradeMutation.isPending}
+                  onClick={() => { upgradeMutation.mutate(recreateFor.id); setRecreateFor(null); }}
+                >
+                  Upgrade in place
+                </button>
+                <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                  The agent downloads the new binary, verifies it, and restarts (~30s).
+                </p>
+              </>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setRecreateFor(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {overlapPreview && (
