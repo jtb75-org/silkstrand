@@ -20,7 +20,7 @@ import (
 // On success the caller should exit the process so the service
 // manager can restart with the new binary.
 //
-// baseURL is the public S3/MinIO base (e.g. https://s3.ng20.org/silkstrand-agent-releases).
+// baseURL is the public S3/MinIO base (e.g. https://downloads.silkstrand.io/agent).
 // version is the release folder ("v0.1.4" or "latest").
 // expectedSHA256 is the hex SHA-256 the server advertised for this platform; empty skips
 // verification (discouraged — keep it strict for prod).
