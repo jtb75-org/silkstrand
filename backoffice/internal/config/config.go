@@ -16,7 +16,7 @@ type Config struct {
 
 	// Tenant auth (in-house, replacing Clerk).
 	TenantJWTSecret string // HS256 secret shared with all DC APIs
-	ResendAPIKey    string // Empty → mailer falls back to noop (logs to stdout)
+	SMTPRelayAddr   string // host:port of the in-cluster SMTP relay (-> SES). Empty → noop mailer (logs to stdout)
 	FromEmail       string // e.g. "SilkStrand <noreply@silkstrand.io>"
 	TenantWebURL    string // Base URL of the tenant frontend for building invite / reset links
 }
@@ -42,7 +42,7 @@ func Load() (*Config, error) {
 		BootstrapAdminEmail:    getEnv("BOOTSTRAP_ADMIN_EMAIL", ""),
 		BootstrapAdminPassword: getEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
 		TenantJWTSecret:        getEnv("TENANT_JWT_SECRET", "dev-secret-change-in-production"),
-		ResendAPIKey:           getEnv("RESEND_API_KEY", ""),
+		SMTPRelayAddr:          getEnv("SMTP_RELAY_ADDR", ""),
 		FromEmail:              getEnv("FROM_EMAIL", "SilkStrand <noreply@silkstrand.io>"),
 		TenantWebURL:           getEnv("TENANT_WEB_URL", "http://localhost:5173"),
 	}
