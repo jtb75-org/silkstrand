@@ -360,14 +360,25 @@ func normalizeDNSName(s string) (name string, wildcard bool, reason string) {
 	if i := strings.Index(s, "://"); i >= 0 { // scheme
 		s = s[i+3:]
 	}
-	if i := strings.LastIndex(s, "@"); i >= 0 { // userinfo
-		s = s[i+1:]
-	}
 	if i := strings.IndexAny(s, "/?#"); i >= 0 { // path / query / fragment
 		s = s[:i]
 	}
-	if i := strings.LastIndex(s, ":"); i >= 0 { // port
-		s = s[:i]
+	if i := strings.LastIndex(s, "@"); i >= 0 { // userinfo
+		s = s[i+1:]
+	}
+	// Strip a trailing :port only when it is genuinely numeric, so malformed
+	// inputs (host:notaport, host:, foo:bar) are rejected rather than silently
+	// truncated to a valid-looking host. A host that still contains ':' here is
+	// a bare IPv6 literal — leave it for the IP check below.
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		host, port := s[:i], s[i+1:]
+		switch {
+		case strings.Contains(host, ":"): // bare IPv6, not host:port
+		case isNumericPort(port):
+			s = host
+		default:
+			return "", false, "invalid host:port"
+		}
 	}
 	s = strings.TrimSuffix(s, ".")
 	if s == "" {
@@ -407,6 +418,20 @@ func validHostname(h string) bool {
 		}
 	}
 	return true
+}
+
+// isNumericPort reports whether p is a valid 1–65535 TCP port (digits only).
+func isNumericPort(p string) bool {
+	if p == "" || len(p) > 5 {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < '0' || p[i] > '9' {
+			return false
+		}
+	}
+	n, _ := strconv.Atoi(p)
+	return n >= 1 && n <= 65535
 }
 
 // flattenAsset spreads the model.Asset fields at the top level and adds

@@ -22,7 +22,11 @@ func TestNormalizeDNSName(t *testing.T) {
 		{"app.example.com", "app.example.com", false, false},
 		{"  APP.Example.COM  ", "app.example.com", false, false},               // trim + lowercase
 		{"https://app.example.com/login?x=1", "app.example.com", false, false}, // scheme + path
-		{"app.example.com:8443", "app.example.com", false, false},              // port
+		{"app.example.com:8443", "app.example.com", false, false},              // numeric port stripped
+		{"app.example.com:notaport", "", false, true},                          // non-numeric port -> reject
+		{"app.example.com:", "", false, true},                                  // empty port -> reject
+		{"foo:bar.example.com", "", false, true},                               // colon, not host:port -> reject
+		{"app.example.com:70000", "", false, true},                             // out-of-range port -> reject
 		{"user@app.example.com", "app.example.com", false, false},              // userinfo
 		{"api.example.com.", "api.example.com", false, false},                  // trailing dot
 		{"*.example.com", "*.example.com", true, false},                        // wildcard
