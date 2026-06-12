@@ -55,7 +55,10 @@
 #                          (NO_PROXY).
 #   --ca-cert=FILE         Path to a PEM CA bundle to trust for outbound TLS
 #                          (TLS-inspecting proxies). Path only — the file must
-#                          already exist on the host; it is never inlined.
+#                          already exist on the host; it is never inlined. In
+#                          docker mode it is bind-mounted into the container.
+#                          --proxy / --no-proxy / --ca-cert all work in both
+#                          binary and docker modes and persist across upgrades.
 #   --docker-network=NAME  Attach container to this Docker network.
 #                          Repeatable. First one is passed to `docker run`;
 #                          subsequent ones via `docker network connect`.
@@ -104,6 +107,10 @@ RATE_LIMIT_PPS="500"
 PROXY=""
 NO_PROXY_LIST=""
 CA_CERT=""
+# Fixed in-container path the host CA file is bind-mounted to (docker mode); the
+# host path is not visible inside the container, so SILKSTRAND_CA_CERT_PATH must
+# point here, not at the host path (ADR 013 D3).
+DOCKER_CA_DEST="/etc/silkstrand/ca.pem"
 DOCKER_NETWORKS=""
 DOCKER_SCAN_ALL_BRIDGES=0
 DOCKER_HOST_NETWORK=0
@@ -552,6 +559,15 @@ docker_build_run_args() {
     if [ -f "$allow_mount" ]; then
         printf -- '-v %s:/etc/silkstrand/scan-allowlist.yaml:ro ' "$allow_mount"
     fi
+    # ADR 013 D3: egress proxy + custom CA. Proxy goes in as env; the CA file is
+    # bind-mounted from the host (its host path means nothing inside the
+    # container) and SILKSTRAND_CA_CERT_PATH points at the in-container path.
+    [ -n "$PROXY" ]         && printf -- '-e HTTPS_PROXY=%s ' "$PROXY"
+    [ -n "$NO_PROXY_LIST" ] && printf -- '-e NO_PROXY=%s ' "$NO_PROXY_LIST"
+    if [ -n "$CA_CERT" ]; then
+        printf -- '-v %s:%s:ro ' "$CA_CERT" "$DOCKER_CA_DEST"
+        printf -- '-e SILKSTRAND_CA_CERT_PATH=%s ' "$DOCKER_CA_DEST"
+    fi
     printf -- '%s' "$image"
 }
 
@@ -615,11 +631,16 @@ EOF
     else
         printf '      SILKSTRAND_NAABU_SCAN_TYPE: c\n'
     fi
+    # ADR 013 D3: proxy env + custom CA path (mounted under volumes below).
+    [ -n "$PROXY" ]         && printf '      HTTPS_PROXY: %s\n' "$PROXY"
+    [ -n "$NO_PROXY_LIST" ] && printf '      NO_PROXY: %s\n' "$NO_PROXY_LIST"
+    [ -n "$CA_CERT" ]       && printf '      SILKSTRAND_CA_CERT_PATH: %s\n' "$DOCKER_CA_DEST"
     printf '    volumes:\n'
     printf '      - %s:/home/nonroot\n' "$vol"
     if [ -f "$allow_mount" ]; then
         printf '      - %s:/etc/silkstrand/scan-allowlist.yaml:ro\n' "$allow_mount"
     fi
+    [ -n "$CA_CERT" ] && printf '      - %s:%s:ro\n' "$CA_CERT" "$DOCKER_CA_DEST"
     if [ "$DOCKER_CAPS" = "raw" ]; then
         printf '    cap_add:\n      - NET_RAW\n      - NET_ADMIN\n'
     fi
@@ -691,6 +712,16 @@ do_upgrade_docker() {
         cname=$(docker_container_name)
     fi
     [ -n "${API_KEY:-}" ] || fail "could not recover agent credentials from existing container"
+
+    # Preserve proxy/CA across the recreate (like creds + networks above) unless
+    # the operator re-passes them this invocation (ADR 013 D3). The CA's host
+    # path is recovered from the existing bind mount's source.
+    _cenv() { docker inspect "$cname" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n "s/^$1=//p" | head -1; }
+    [ -z "$PROXY" ]         && PROXY=$(_cenv HTTPS_PROXY)
+    [ -z "$NO_PROXY_LIST" ] && NO_PROXY_LIST=$(_cenv NO_PROXY)
+    if [ -z "$CA_CERT" ]; then
+        CA_CERT=$(docker inspect "$cname" --format "{{range .Mounts}}{{if eq .Destination \"$DOCKER_CA_DEST\"}}{{.Source}}{{end}}{{end}}" 2>/dev/null)
+    fi
 
     log "Upgrading $cname to ${VERSION}"
     docker pull "${IMAGE_REGISTRY}/silkstrand-agent:${VERSION}" >/dev/null
