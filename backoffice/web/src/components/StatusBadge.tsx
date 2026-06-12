@@ -9,6 +9,7 @@ const statusStyles: Record<string, { bg: string; color: string }> = {
   degraded: { bg: '#fef3c7', color: '#92400e' },
   provisioning: { bg: '#dbeafe', color: '#1d4ed8' },
   pending: { bg: '#dbeafe', color: '#1d4ed8' },
+  invited: { bg: '#fef3c7', color: '#92400e' },
   offline: { bg: '#fee2e2', color: '#991b1b' },
   suspended: { bg: '#fee2e2', color: '#991b1b' },
   failed: { bg: '#fee2e2', color: '#991b1b' },

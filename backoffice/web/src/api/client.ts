@@ -9,6 +9,7 @@ import type {
   CreateTenantRequest,
   UpdateTenantRequest,
   UpdateTenantStatusRequest,
+  TenantInvite,
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -156,6 +157,41 @@ export function retryTenantProvisioning(id: string): Promise<Tenant> {
 
 export function deleteTenant(id: string): Promise<void> {
   return request<void>(`/api/v1/tenants/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// Tenant members + invites (backoffice admin view of one tenant)
+
+export function listTenantMembers(
+  tenantId: string,
+): Promise<import('./types').TenantMember[]> {
+  return request(`/api/v1/tenants/${tenantId}/members`);
+}
+
+export function listTenantInvites(
+  tenantId: string,
+): Promise<import('./types').TenantPendingInvite[]> {
+  return request(`/api/v1/tenants/${tenantId}/invites`);
+}
+
+export function createTenantInvite(
+  tenantId: string, req: TenantInvite,
+): Promise<{ status: string; error?: string }> {
+  return request(`/api/v1/tenants/${tenantId}/invites`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+export function resendTenantInvite(tenantId: string, inviteId: string): Promise<void> {
+  return request(`/api/v1/tenants/${tenantId}/invites/${inviteId}/resend`, {
+    method: 'POST',
+  });
+}
+
+export function deleteTenantInvite(tenantId: string, inviteId: string): Promise<void> {
+  return request(`/api/v1/tenants/${tenantId}/invites/${inviteId}`, {
     method: 'DELETE',
   });
 }
