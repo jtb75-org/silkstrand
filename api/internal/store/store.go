@@ -139,6 +139,9 @@ type Store interface {
 
 	UpsertAsset(ctx context.Context, in UpsertAssetInput) (*model.Asset, error)
 	UpsertAssetEndpoint(ctx context.Context, in UpsertAssetEndpointInput) (*model.AssetEndpoint, error)
+	// ListHTTPServiceHostnames returns the tenant's imported http_service
+	// hostnames — the scan targets for a dns_list-scoped definition (ADR 014 D4).
+	ListHTTPServiceHostnames(ctx context.Context, tenantID string) ([]string, error)
 	GetAssetByID(ctx context.Context, id string) (*model.Asset, error)
 	ListAssets(ctx context.Context, filter AssetFilter) (items []model.Asset, total int, err error)
 	ListAssetEndpoints(ctx context.Context, filter AssetEndpointFilter) ([]AssetEndpointRow, int, error)

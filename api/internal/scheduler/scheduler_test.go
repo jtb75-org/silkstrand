@@ -23,10 +23,15 @@ type fakeStore struct {
 	cidrUpserts   []cidrUpsert
 	createInputs  []store.CreateScanForDefinitionInput
 	allowlistSnap *store.AgentAllowlistSnapshot
+	httpNames     []string
 }
 
 func (f *fakeStore) GetAgentAllowlist(ctx context.Context, agentID string) (*store.AgentAllowlistSnapshot, error) {
 	return f.allowlistSnap, nil
+}
+
+func (f *fakeStore) ListHTTPServiceHostnames(ctx context.Context, tenantID string) ([]string, error) {
+	return f.httpNames, nil
 }
 
 type cidrUpsert struct {
@@ -196,6 +201,54 @@ func TestExecuteAgentAllowlistScope(t *testing.T) {
 		if f.cidrUpserts[i].AgentID == nil || *f.cidrUpserts[i].AgentID != agent {
 			t.Errorf("entry %d agent: got %v want %q", i, f.cidrUpserts[i].AgentID, agent)
 		}
+	}
+}
+
+func TestExecuteDNSListScope(t *testing.T) {
+	agent := "agent-1"
+	def := model.ScanDefinition{
+		ID:        "def-dns",
+		TenantID:  "t-1",
+		Kind:      model.ScanDefinitionKindDiscovery,
+		ScopeKind: model.ScanDefinitionScopeDNSList,
+		AgentID:   &agent,
+		Enabled:   true,
+	}
+	f := &fakeStore{httpNames: []string{"app.example.com", "api.example.com"}}
+	d := Dispatcher{Store: f}
+	if err := d.Execute(context.Background(), def); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// One target upsert + one scan per imported name.
+	if len(f.cidrUpserts) != 2 || f.createCalls != 2 {
+		t.Fatalf("got upserts=%d createCalls=%d, want 2/2", len(f.cidrUpserts), f.createCalls)
+	}
+	want := []string{"app.example.com", "api.example.com"}
+	for i, w := range want {
+		if f.cidrUpserts[i].CIDR != w {
+			t.Errorf("dispatch %d: got %q want %q", i, f.cidrUpserts[i].CIDR, w)
+		}
+		if f.cidrUpserts[i].AgentID == nil || *f.cidrUpserts[i].AgentID != agent {
+			t.Errorf("dispatch %d agent: got %v want %q", i, f.cidrUpserts[i].AgentID, agent)
+		}
+	}
+}
+
+// TestExecuteDNSListScopeBlocksOnEmpty: nothing imported must block, not scan nothing.
+func TestExecuteDNSListScopeBlocksOnEmpty(t *testing.T) {
+	agent := "agent-1"
+	def := model.ScanDefinition{
+		ID: "def-dns-empty", TenantID: "t-1",
+		Kind: model.ScanDefinitionKindDiscovery, ScopeKind: model.ScanDefinitionScopeDNSList,
+		AgentID: &agent, Enabled: true,
+	}
+	f := &fakeStore{httpNames: nil}
+	d := Dispatcher{Store: f}
+	if err := d.Execute(context.Background(), def); err == nil {
+		t.Fatal("expected a blocking error, got nil")
+	}
+	if f.createCalls != 0 || len(f.cidrUpserts) != 0 {
+		t.Errorf("must not dispatch: createCalls=%d upserts=%d", f.createCalls, len(f.cidrUpserts))
 	}
 }
 

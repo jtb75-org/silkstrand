@@ -230,6 +230,7 @@ const (
 
 	AssetSourceManual     = "manual"
 	AssetSourceDiscovered = "discovered"
+	AssetSourceImported   = "imported" // operator DNS-name import (ADR 014 D2)
 
 	// Per-endpoint allowlist classification (carried forward from ADR 003 D11).
 	AllowlistStatusAllowlisted = "allowlisted"
@@ -442,6 +443,10 @@ const (
 	// the agent currently reports in its scan-allowlist snapshot (ADR 013 D4).
 	// Resolved at dispatch time; requires agent_id.
 	ScanDefinitionScopeAgentAllowlist = "agent_allowlist"
+	// ScanDefinitionScopeDNSList scopes a discovery scan to the tenant's
+	// imported http_service hostnames (ADR 014 D4). Resolved at dispatch — one
+	// vhost-aware directive per name; requires agent_id.
+	ScanDefinitionScopeDNSList = "dns_list"
 )
 
 // ----- Findings (ADR 007 D1) -------------------------------------

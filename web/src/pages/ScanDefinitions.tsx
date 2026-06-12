@@ -34,6 +34,7 @@ const SCOPE_KINDS: { value: ScanDefinitionScopeKind; label: string }[] = [
   { value: 'asset_endpoint', label: 'Single endpoint' },
   { value: 'collection', label: 'Collection' },
   { value: 'cidr', label: 'CIDR / IP range' },
+  { value: 'dns_list', label: 'Imported DNS names' },
 ];
 
 // Rough natural-language helper for common cron shapes — keeps the
@@ -315,6 +316,10 @@ export default function ScanDefinitions() {
       }
       case 'cidr':
         return `CIDR:${d.cidr ?? '?'}`;
+      case 'agent_allowlist':
+        return 'Agent allowlist';
+      case 'dns_list':
+        return 'Imported DNS names';
     }
   }
 
@@ -423,6 +428,14 @@ export default function ScanDefinitions() {
                 required
               />
             </div>
+          )}
+
+          {scopeKind === 'dns_list' && (
+            <p className="muted" style={{ fontSize: 13 }}>
+              Scans every imported DNS name (vhost-aware, by SNI/Host) via the agent
+              selected below. Import names on the <strong>Assets</strong> page; each
+              must be in that agent's allowlist to actually scan.
+            </p>
           )}
 
           {kind === 'compliance' && (

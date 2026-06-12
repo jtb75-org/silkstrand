@@ -357,7 +357,7 @@ export interface ControlEntry {
 // ADR 007 — scan definitions + findings
 
 export type ScanDefinitionKind = 'compliance' | 'discovery';
-export type ScanDefinitionScopeKind = 'asset_endpoint' | 'collection' | 'cidr';
+export type ScanDefinitionScopeKind = 'asset_endpoint' | 'collection' | 'cidr' | 'agent_allowlist' | 'dns_list';
 
 export interface ScanDefinition {
   id: string;

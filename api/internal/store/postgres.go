@@ -1419,6 +1419,33 @@ func (s *PostgresStore) UpsertAsset(ctx context.Context, in UpsertAssetInput) (*
 	return &a, nil
 }
 
+// ListHTTPServiceHostnames returns the tenant's *imported* http_service
+// hostnames (ADR 014 D4) — the dispatch targets for a dns_list-scoped scan
+// definition. Restricted to source='imported' (model.AssetSourceImported) so
+// vhosts the pipeline itself discovered (source='discovered') are NOT re-fed
+// into dns_list, which keeps the scope bounded to what the operator explicitly
+// imported and avoids a discover→re-dispatch feedback loop.
+func (s *PostgresStore) ListHTTPServiceHostnames(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT hostname FROM assets
+		 WHERE tenant_id = $1 AND resource_type = 'http_service'
+		   AND source = 'imported' AND hostname IS NOT NULL
+		 ORDER BY hostname`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("listing http_service hostnames: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("scanning hostname: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) UpsertAssetEndpoint(ctx context.Context, in UpsertAssetEndpointInput) (*model.AssetEndpoint, error) {
 	if in.Protocol == "" {
 		in.Protocol = "tcp"

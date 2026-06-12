@@ -233,6 +233,43 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 			}
 		}
 		return firstErr
+	case model.ScanDefinitionScopeDNSList:
+		if def.AgentID == nil {
+			return fmt.Errorf("scope=dns_list requires agent_id")
+		}
+		names, err := d.Store.ListHTTPServiceHostnames(ctx, def.TenantID)
+		if err != nil {
+			return fmt.Errorf("loading http_service hostnames: %w", err)
+		}
+		// Fail-safe (mirrors agent_allowlist): nothing imported → block with an
+		// actionable error rather than scanning nothing.
+		if len(names) == 0 {
+			return fmt.Errorf("no imported DNS names; scope=dns_list has nothing to scan")
+		}
+		slog.Info("scheduler.dns_list_dispatch", "definition", def.ID,
+			"agent", *def.AgentID, "targets", len(names))
+		// One vhost-aware directive per name. The agent re-vets each name against
+		// its local allowlist (ADR 014 D3 / D11), so out-of-scope names are
+		// blocked agent-side. As with agent_allowlist, names upsert as cidr-type
+		// targets — the agent keys off target_identifier.
+		var firstErr error
+		for _, name := range names {
+			targetID, err := d.Store.UpsertTargetByCIDR(ctx, def.TenantID, name, def.AgentID, "scheduled")
+			if err != nil {
+				slog.Warn("scheduler.dns_list_target", "definition", def.ID, "name", name, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if err := d.dispatchOne(ctx, def, nil, &targetID); err != nil {
+				slog.Warn("scheduler.dispatch_one", "definition", def.ID, "name", name, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
 	}
 	return fmt.Errorf("unknown scope_kind: %q", def.ScopeKind)
 }
