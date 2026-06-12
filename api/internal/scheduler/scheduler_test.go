@@ -15,13 +15,18 @@ import (
 // the type satisfies the interface.
 type fakeStore struct {
 	store.Store
-	claimed      []model.ScanDefinition
-	nextRunAt    map[string]time.Time
-	createCalls  int
-	createErr    error
-	lastRun      map[string]string
-	cidrUpserts  []cidrUpsert
-	createInputs []store.CreateScanForDefinitionInput
+	claimed       []model.ScanDefinition
+	nextRunAt     map[string]time.Time
+	createCalls   int
+	createErr     error
+	lastRun       map[string]string
+	cidrUpserts   []cidrUpsert
+	createInputs  []store.CreateScanForDefinitionInput
+	allowlistSnap *store.AgentAllowlistSnapshot
+}
+
+func (f *fakeStore) GetAgentAllowlist(ctx context.Context, agentID string) (*store.AgentAllowlistSnapshot, error) {
+	return f.allowlistSnap, nil
 }
 
 type cidrUpsert struct {
@@ -145,6 +150,85 @@ func TestTickCrashRecovery(t *testing.T) {
 	}
 	if got := f.lastRun["def-1"]; got != "failed" {
 		t.Errorf("last_run_status: got %q want 'failed'", got)
+	}
+}
+
+// TestExecuteAgentAllowlistScope verifies an agent_allowlist-scope definition
+// resolves the agent's reported allowlist snapshot and dispatches one scan per
+// allow entry, as-is, against the agent (ADR 013 D4).
+func TestExecuteAgentAllowlistScope(t *testing.T) {
+	agent := "agent-1"
+	bundle := "bundle-discovery"
+	def := model.ScanDefinition{
+		ID:        "def-al",
+		TenantID:  "t-1",
+		Kind:      model.ScanDefinitionKindDiscovery,
+		ScopeKind: model.ScanDefinitionScopeAgentAllowlist,
+		AgentID:   &agent,
+		BundleID:  &bundle,
+		Enabled:   true,
+	}
+	f := &fakeStore{
+		allowlistSnap: &store.AgentAllowlistSnapshot{
+			AgentID: agent,
+			Hash:    "h1",
+			// Mixed forms + a blank entry that must be skipped.
+			Allow: []string{"10.0.0.0/24", "192.168.5.10", " ", "host.example.com"},
+		},
+	}
+	d := Dispatcher{Store: f}
+	if err := d.Execute(context.Background(), def); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// 3 real entries → 3 target upserts + 3 scans (blank skipped).
+	if len(f.cidrUpserts) != 3 {
+		t.Fatalf("UpsertTargetByCIDR calls: got %d want 3", len(f.cidrUpserts))
+	}
+	if f.createCalls != 3 {
+		t.Fatalf("CreateScanForDefinition calls: got %d want 3", f.createCalls)
+	}
+	got := []string{f.cidrUpserts[0].CIDR, f.cidrUpserts[1].CIDR, f.cidrUpserts[2].CIDR}
+	want := []string{"10.0.0.0/24", "192.168.5.10", "host.example.com"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %q want %q", i, got[i], want[i])
+		}
+		if f.cidrUpserts[i].AgentID == nil || *f.cidrUpserts[i].AgentID != agent {
+			t.Errorf("entry %d agent: got %v want %q", i, f.cidrUpserts[i].AgentID, agent)
+		}
+	}
+}
+
+// TestExecuteAgentAllowlistScopeBlocksOnMissingSnapshot verifies the fail-safe:
+// no snapshot (or empty) must block the run, never dispatch a broad scan.
+func TestExecuteAgentAllowlistScopeBlocksOnMissingSnapshot(t *testing.T) {
+	agent := "agent-1"
+	def := model.ScanDefinition{
+		ID:        "def-al-empty",
+		TenantID:  "t-1",
+		Kind:      model.ScanDefinitionKindDiscovery,
+		ScopeKind: model.ScanDefinitionScopeAgentAllowlist,
+		AgentID:   &agent,
+		Enabled:   true,
+	}
+	for _, tc := range []struct {
+		name string
+		snap *store.AgentAllowlistSnapshot
+	}{
+		{"nil snapshot", nil},
+		{"empty allow", &store.AgentAllowlistSnapshot{AgentID: agent, Allow: []string{" "}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeStore{allowlistSnap: tc.snap}
+			d := Dispatcher{Store: f}
+			err := d.Execute(context.Background(), def)
+			if err == nil {
+				t.Fatal("expected a blocking error, got nil")
+			}
+			if f.createCalls != 0 || len(f.cidrUpserts) != 0 {
+				t.Errorf("must not dispatch: createCalls=%d upserts=%d", f.createCalls, len(f.cidrUpserts))
+			}
+		})
 	}
 }
 
