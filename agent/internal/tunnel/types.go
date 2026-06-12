@@ -59,7 +59,7 @@ type ProbeResultPayload struct {
 // swap in place, and exit so the service manager restarts it.
 type UpgradePayload struct {
 	Version          string            `json:"version"`  // e.g. "v0.1.4" or "latest"
-	BaseURL          string            `json:"base_url"` // e.g. https://storage.googleapis.com/silkstrand-agent-releases
+	BaseURL          string            `json:"base_url"` // e.g. https://s3.ng20.org/silkstrand-agent-releases
 	SHA256ByPlatform map[string]string `json:"sha256_by_platform"`
 	// Keys are "<os>-<arch>": linux-amd64, darwin-arm64, etc.
 }

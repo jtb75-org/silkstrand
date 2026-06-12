@@ -40,7 +40,7 @@ var collectorRuntimesBaseURL = func() string {
 	if v := os.Getenv("SILKSTRAND_RUNTIMES_BASE_URL"); v != "" {
 		return v
 	}
-	return "https://storage.googleapis.com/silkstrand-runtimes"
+	return "https://s3.ng20.org/silkstrand-runtimes"
 }()
 
 // collectorRuntimesDir is where cached collector binaries live on disk.

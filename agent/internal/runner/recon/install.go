@@ -24,7 +24,7 @@ var runtimesBaseURL = func() string {
 	if v := os.Getenv("SILKSTRAND_RUNTIMES_BASE_URL"); v != "" {
 		return v
 	}
-	return "https://storage.googleapis.com/silkstrand-runtimes"
+	return "https://s3.ng20.org/silkstrand-runtimes"
 }()
 
 // runtimesDir is where installed binaries live on disk. Override via

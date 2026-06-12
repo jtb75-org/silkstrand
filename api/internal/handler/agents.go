@@ -239,7 +239,7 @@ func (h *AgentsHandler) RotateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // DownloadInfo describes where agent binaries and the installer script live.
-// The public GCS base URL is configured at the API level (AGENT_RELEASES_URL)
+// The public S3/MinIO base URL is configured at the API level (AGENT_RELEASES_URL)
 // and surfaced here so the tenant frontend doesn't need to hardcode it.
 type DownloadInfo struct {
 	Version       string            `json:"version"`
@@ -252,7 +252,7 @@ type DownloadInfo struct {
 func (h *AgentsHandler) Downloads(w http.ResponseWriter, r *http.Request) {
 	base := h.releasesURL
 	if base == "" {
-		base = "https://storage.googleapis.com/silkstrand-agent-releases"
+		base = "https://s3.ng20.org/silkstrand-agent-releases"
 	}
 	info := DownloadInfo{
 		Version:       "latest",
@@ -428,7 +428,7 @@ func (h *AgentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := h.releasesURL
 	if baseURL == "" {
-		baseURL = "https://storage.googleapis.com/silkstrand-agent-releases"
+		baseURL = "https://s3.ng20.org/silkstrand-agent-releases"
 	}
 
 	payload, _ := json.Marshal(websocket.UpgradePayload{
