@@ -19,7 +19,7 @@ env:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: jtb75-arc
     outputs:
       api: ${{ steps.set.outputs.api }}
       web: ${{ steps.set.outputs.web }}
@@ -82,7 +82,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init "${GITHUB_WORKSPACE}"
+          git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
 
       - name: Short SHA
         id: sha
@@ -96,7 +102,7 @@ jobs:
           ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
         run: |
           AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
-          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"},"https://%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}" "${REGISTRY}" "${AUTH}")
           mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
           printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
           printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
@@ -104,6 +110,8 @@ jobs:
           printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
 
       - name: Kaniko build and push
+        env:
+          DOCKER_CONFIG: /kaniko/.docker
         run: |
           /opt/kaniko/executor \
             --context="${GITHUB_WORKSPACE}" \
@@ -123,7 +131,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init "${GITHUB_WORKSPACE}"
+          git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
 
       - name: Short SHA
         id: sha
@@ -137,7 +151,7 @@ jobs:
           ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
         run: |
           AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
-          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"},"https://%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}" "${REGISTRY}" "${AUTH}")
           mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
           printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
           printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
@@ -145,6 +159,8 @@ jobs:
           printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
 
       - name: Kaniko build and push
+        env:
+          DOCKER_CONFIG: /kaniko/.docker
         run: |
           /opt/kaniko/executor \
             --context="${GITHUB_WORKSPACE}/web" \
@@ -164,7 +180,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init "${GITHUB_WORKSPACE}"
+          git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
 
       - name: Short SHA
         id: sha
@@ -178,7 +200,7 @@ jobs:
           ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
         run: |
           AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
-          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"},"https://%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}" "${REGISTRY}" "${AUTH}")
           mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
           printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
           printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
@@ -186,6 +208,8 @@ jobs:
           printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
 
       - name: Kaniko build and push
+        env:
+          DOCKER_CONFIG: /kaniko/.docker
         run: |
           /opt/kaniko/executor \
             --context="${GITHUB_WORKSPACE}/backoffice" \
@@ -205,7 +229,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init "${GITHUB_WORKSPACE}"
+          git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
 
       - name: Short SHA
         id: sha
@@ -219,7 +249,7 @@ jobs:
           ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
         run: |
           AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
-          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"},"https://%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}" "${REGISTRY}" "${AUTH}")
           mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
           printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
           printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
@@ -227,6 +257,8 @@ jobs:
           printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
 
       - name: Kaniko build and push
+        env:
+          DOCKER_CONFIG: /kaniko/.docker
         run: |
           /opt/kaniko/executor \
             --context="${GITHUB_WORKSPACE}/backoffice/web" \
