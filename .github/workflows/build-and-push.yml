@@ -110,6 +110,7 @@ jobs:
             --dockerfile="${GITHUB_WORKSPACE}/api/Dockerfile" \
             --destination="${REGISTRY}/silkstrand-api:sha-${{ steps.sha.outputs.short }}" \
             --destination="${REGISTRY}/silkstrand-api:main-latest" \
+            --skip-push-permission-check \
             --snapshot-mode=redo
 
   build-web:
@@ -150,6 +151,7 @@ jobs:
             --dockerfile="${GITHUB_WORKSPACE}/web/Dockerfile" \
             --destination="${REGISTRY}/silkstrand-web:sha-${{ steps.sha.outputs.short }}" \
             --destination="${REGISTRY}/silkstrand-web:main-latest" \
+            --skip-push-permission-check \
             --snapshot-mode=redo
 
   build-backoffice-api:
@@ -190,6 +192,7 @@ jobs:
             --dockerfile="${GITHUB_WORKSPACE}/backoffice/Dockerfile" \
             --destination="${REGISTRY}/silkstrand-backoffice-api:sha-${{ steps.sha.outputs.short }}" \
             --destination="${REGISTRY}/silkstrand-backoffice-api:main-latest" \
+            --skip-push-permission-check \
             --snapshot-mode=redo
 
   build-backoffice-web:
@@ -230,6 +233,7 @@ jobs:
             --dockerfile="${GITHUB_WORKSPACE}/backoffice/web/Dockerfile" \
             --destination="${REGISTRY}/silkstrand-backoffice-web:sha-${{ steps.sha.outputs.short }}" \
             --destination="${REGISTRY}/silkstrand-backoffice-web:main-latest" \
+            --skip-push-permission-check \
             --snapshot-mode=redo
 
   bump-gitops:
