@@ -511,6 +511,13 @@ func runUninstall() error {
 	if err != nil {
 		return err
 	}
+	// This subcommand returns before normal startup, so configure outbound TLS
+	// here too — the self-deregister below must trust the custom CA on a
+	// TLS-inspected network (ADR 013 D3). Best-effort: a bad CA path shouldn't
+	// block uninstall, so log and continue rather than abort.
+	if err := nettls.Configure(nettls.Options{CACertPath: cfg.CACertPath}); err != nil {
+		slog.Warn("configuring outbound TLS for deregister (continuing)", "error", err)
+	}
 	if err := bootstrap.EnsureCreds(cfg, version); err != nil {
 		// No creds to call with — nothing to deregister.
 		slog.Warn("no credentials available; skipping server deregister", "error", err)

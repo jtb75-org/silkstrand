@@ -369,6 +369,16 @@ EOF
 install_service_darwin() {
     plist=/Library/LaunchDaemons/io.silkstrand.agent.plist
     set -a; . "$CONFIG_FILE"; set +a
+    # launchd (unlike systemd's EnvironmentFile) embeds env in the plist, so the
+    # optional proxy/CA vars from agent.env must be emitted explicitly or the
+    # daemon starts without them (ADR 013 D3). Build them conditionally.
+    extra_env=""
+    [ -n "${HTTPS_PROXY:-}" ] && extra_env="$extra_env
+    <key>HTTPS_PROXY</key><string>${HTTPS_PROXY}</string>"
+    [ -n "${NO_PROXY:-}" ] && extra_env="$extra_env
+    <key>NO_PROXY</key><string>${NO_PROXY}</string>"
+    [ -n "${SILKSTRAND_CA_CERT_PATH:-}" ] && extra_env="$extra_env
+    <key>SILKSTRAND_CA_CERT_PATH</key><string>${SILKSTRAND_CA_CERT_PATH}</string>"
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -380,7 +390,7 @@ install_service_darwin() {
     <key>SILKSTRAND_AGENT_ID</key><string>${SILKSTRAND_AGENT_ID}</string>
     <key>SILKSTRAND_AGENT_KEY</key><string>${SILKSTRAND_AGENT_KEY}</string>
     <key>SILKSTRAND_API_URL</key><string>${SILKSTRAND_API_URL}</string>
-    <key>SILKSTRAND_BUNDLE_DIR</key><string>${SILKSTRAND_BUNDLE_DIR}</string>
+    <key>SILKSTRAND_BUNDLE_DIR</key><string>${SILKSTRAND_BUNDLE_DIR}</string>${extra_env}
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
