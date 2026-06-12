@@ -4,61 +4,65 @@ SilkStrand is a SaaS-based CIS compliance scanner that reaches into private cust
 
 ## Architecture Overview
 
-SilkStrand has a three-tier architecture: a **backoffice manager** (control plane), one or more **data centers** (regional deployments), and **edge agents** (customer environments).
+SilkStrand has a three-tier architecture: a **backoffice manager** (control plane), one or more **data centers** (logical "pseudo-DC" deployments), and **edge agents** (customer environments).
+
+Today everything runs on **one self-hosted k3s cluster** (homelab). The backoffice and each data center are **k8s namespaces** (`silkstrand-backoffice`, `dc-us`, future `dc-*`) in that single cluster — not separate GCP projects. The backoffice/DC split is preserved (Option A): the backoffice talks to each DC over **in-cluster service DNS** rather than a public URL.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│            Backoffice Manager (own GCP project)             │
-│                                                             │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ React UI │  │ Go API       │  │ Cloud SQL Postgres    │  │
-│  │ (Admin)  │──│ (Cloud Run)  │──│ (DCs, tenants, admin) │  │
-│  └──────────┘  └──────┬───────┘  └──────────────────────┘  │
-└────────────────────────┼────────────────────────────────────┘
-                         │ HTTPS (/internal/v1/)
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  DC: US      │  │  DC: EU      │  │  DC: APAC    │
-│  (us-central)│  │  (eu-west)   │  │  (future)    │
-└──────┬───────┘  └──────────────┘  └──────────────┘
-       │
-┌──────┴──────────────────────────────────────────────┐
-│              Data Center (per-region GCP project)    │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌────────┐ ┌───────┐  │
-│  │ React UI │  │  Go API  │  │Upstash │ │  GCS  │  │
-│  │ (Tenant) │──│ (Cloud   │──│ Redis  │ │Bundles│  │
-│  │          │  │   Run)   │  │(pub/sub│ │       │  │
-│  └──────────┘  └────┬─────┘  └────────┘ └───┬───┘  │
-│                     │                        │      │
-│                ┌────┴─────┐                  │      │
-│                │ Cloud SQL│                  │      │
-│                │ Postgres │                  │      │
-│                └──────────┘                  │      │
-└──────────────────────┬───────────────────────┼──────┘
-                       │                       │
-          ─ ─ ─ ─  WSS 443 (outbound) ─ ─ ─ ─ ─
-                       │                       │
-┌──────────────────────┼───────────────────────┼──────┐
-│   Customer Environment                       │      │
-│  ┌───────────────────┴───────────────────────┴───┐  │
-│  │           SilkStrand Agent (Go binary)        │  │
-│  │  ┌────────┐ ┌────────┐ ┌───────┐ ┌────────┐  │  │
-│  │  │ Tunnel │ │ Runner │ │ Cache │ │ Vault  │  │  │
-│  │  │ (WSS)  │ │(Python)│ │(local)│ │ Client │  │  │
-│  │  └────────┘ └───┬────┘ └───────┘ └───┬────┘  │  │
-│  └─────────────────┼────────────────────┼────────┘  │
-│             ┌──────┴──────┐    ┌────────┴────────┐  │
-│             │ Scan Targets│    │  Secret Store    │  │
-│             │ (DB, OS)    │    │ (Vault, CyberArk)│  │
-│             └─────────────┘    └─────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                    k3s cluster (homelab)                            │
+│                                                                     │
+│  ┌─ namespace: silkstrand-backoffice ──────────────────────────┐   │
+│  │  ┌──────────┐  ┌──────────────┐  ┌──────────────────────┐   │   │
+│  │  │ React UI │  │ Go API       │  │ CloudNativePG         │   │   │
+│  │  │ (Admin)  │──│ (Deployment) │──│ (DCs, tenants, admin) │   │   │
+│  │  └──────────┘  └──────┬───────┘  └──────────────────────┘   │   │
+│  └───────────────────────┼──────────────────────────────────────┘   │
+│         in-cluster HTTP   │  http://silkstrand-api.dc-us.svc.cluster.local:8080
+│        ┌──────────────────┼──────────────────┐                      │
+│        ▼                  ▼                  ▼                      │
+│  ┌────────────┐    ┌────────────┐    ┌────────────┐                │
+│  │ ns: dc-us  │    │ ns: dc-eu  │    │ ns: dc-*   │                │
+│  └─────┬──────┘    │  (future)  │    │  (future)  │                │
+│        │           └────────────┘    └────────────┘                │
+│  ┌─────┴──────────────────────────────────────────────────────┐   │
+│  │  namespace: dc-us                                          │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌────────┐  ┌──────────────┐  │   │
+│  │  │ React UI │  │  Go API  │  │ Redis  │  │ bundles      │  │   │
+│  │  │ (Tenant) │──│(Deploy-  │──│(Deploy,│  │ (MinIO,      │  │   │
+│  │  │          │  │  ment)   │  │ pub/sub│  │  in-cluster) │  │   │
+│  │  └──────────┘  └────┬─────┘  └────────┘  └──────┬───────┘  │   │
+│  │                ┌────┴───────────┐                │          │   │
+│  │                │ CloudNativePG  │                │          │   │
+│  │                │ (per-ns Pg 16) │                │          │   │
+│  │                └────────────────┘                │          │   │
+│  └──────────────────────┬───────────────────────────┼──────────┘   │
+└─────────────────────────┼───────────────────────────┼──────────────┘
+                          │                           │
+   Cloudflare tunnel +    │   WSS 443 (outbound)      │
+   traefik ingress ───────┼───────────────────────────┼──────────────
+                          │                           │
+┌─────────────────────────┼───────────────────────────┼──────────────┐
+│   Customer Environment                              │              │
+│  ┌──────────────────────┴───────────────────────────┴───┐          │
+│  │           SilkStrand Agent (Go binary)               │          │
+│  │  ┌────────┐ ┌────────┐ ┌───────┐ ┌────────┐         │          │
+│  │  │ Tunnel │ │ Runner │ │ Cache │ │ Vault  │         │          │
+│  │  │ (WSS)  │ │(Python)│ │(local)│ │ Client │         │          │
+│  │  └────────┘ └───┬────┘ └───────┘ └───┬────┘         │          │
+│  └─────────────────┼────────────────────┼───────────────┘          │
+│             ┌──────┴──────┐    ┌────────┴────────┐                 │
+│             │ Scan Targets│    │  Secret Store    │                 │
+│             │ (DB, OS)    │    │ (Vault, CyberArk)│                 │
+│             └─────────────┘    └─────────────────┘                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Key Driver: Data Residency
+Platform images are pulled from the in-cluster **zot** OCI registry; the customer agent image is published to a public zot ingress (agents can't reach the LAN registry). Deploys are GitOps via Argo CD.
 
-Each data center is a full deployment in a specific region. EU customers get their data in an EU data center. The backoffice provides cross-datacenter visibility and management without accessing DC databases directly.
+### Key Driver: Data Residency (relaxed)
+
+Originally each data center was a full regional deployment so EU data stayed in EU. On the homelab k3s cluster, data residency is **relaxed for now**: the backoffice and DCs are logical namespaces in a single cluster (a "pseudo-DC" model). The path back to true per-region residency is to **promote a namespace to its own regional cluster** later. The backoffice still provides cross-DC visibility and management without touching DC databases directly (per-namespace DB isolation is the boundary).
 
 ## Tech Stack
 
@@ -69,13 +73,14 @@ Each data center is a full deployment in a specific region. EU customers get the
 | Backoffice API | Go | Same patterns as DC API, separate deployment |
 | Tenant Frontend | React + TypeScript | Rich component ecosystem, standard SPA |
 | Backoffice Frontend | React + TypeScript | Same stack, separate app, navy/teal theme |
-| Database | Cloud SQL PostgreSQL 16 | Managed, reliable, GCP-native |
-| Real-time | Upstash Redis | Serverless Redis, pay-per-request, zero idle cost |
-| Hosting | GCP Cloud Run | Serverless containers, scale-to-zero |
-| Object Storage | GCS | Compliance bundles (signed, versioned) |
-| Container Registry | Artifact Registry | `us-central1-docker.pkg.dev/silkstrand-{env}/silkstrand/` |
-| IaC | OpenTofu (Terraform-compatible) | GCP infrastructure management |
-| DNS | Cloudflare | DNS management, domain: silkstrand.io |
+| Database | CloudNativePG (PostgreSQL 16) | One `Cluster` per namespace (instance-per-DC); `storageClass: longhorn`. App `DATABASE_URL` from the CNPG `<cluster>-app` secret. |
+| Real-time | Self-hosted Redis | One Redis Deployment per `dc-*` namespace (pub/sub for scan directives); replaces Upstash. Backoffice uses no Redis. |
+| Hosting | k3s (self-hosted homelab) | Single cluster; backoffice + each DC are k8s namespaces. Deployments, not serverless. |
+| Object Storage | In-cluster bundles (MinIO) | Compliance bundles served in-cluster. (Customer-facing agent/runtime artifacts NOT yet migrated — still GCS.) |
+| Container Registry | zot (OCI) | `zot.lan.ng20.org` (LAN, in-cluster pulls); `zot.ng20.org` (public, customer agent image). |
+| Deploy / IaC | Kustomize + Argo CD (GitOps) | App manifests in `jtb75-org/silkstrand-gitops`, auto-synced by Argo CD. OpenTofu retained for any residual GCP infra not yet decommissioned. |
+| Secrets | OpenBao + External Secrets Operator | OpenBao (Vault-compatible, auto-unsealed) KV v2; ESO `ClusterSecretStore` syncs into native k8s Secrets per namespace. |
+| DNS / ingress | Cloudflare + cloudflared + traefik + cert-manager | DNS + tunnel + ingress + TLS, domain: silkstrand.io |
 | Auth (tenant) | In-house: bcrypt + HS256 JWT | Users + memberships live in the backoffice; DCs validate JWTs with a shared `TENANT_JWT_SECRET`. |
 | Auth (admin) | In-house: bcrypt + JWT | Backoffice admin login (separate from tenant users). |
 | Transactional email | Resend | Invitations, password resets. Pluggable `mailer.Mailer` interface. |
@@ -84,7 +89,7 @@ Each data center is a full deployment in a specific region. EU customers get the
 
 ```
 silkstrand/
-├── api/                    # Data Center Go API server (Cloud Run)
+├── api/                    # Data Center Go API server (k3s Deployment)
 │   ├── cmd/silkstrand-api/ # Entry point
 │   ├── internal/
 │   │   ├── config/         # Environment-based config
@@ -93,7 +98,7 @@ silkstrand/
 │   │   ├── middleware/     # Auth (JWT), tenant isolation, internal API key, logging
 │   │   ├── model/          # Domain types
 │   │   ├── store/          # Postgres data access + migrations
-│   │   ├── pubsub/         # Upstash Redis pub/sub
+│   │   ├── pubsub/         # Redis pub/sub
 │   │   ├── rules/          # ADR 006 rule engine (match {collection_id} + actions)
 │   │   ├── notify/         # Notification dispatcher (webhook + slack live; email/pagerduty stub)
 │   │   ├── scheduler/      # ADR 007 in-process scan_definition scheduler
@@ -183,7 +188,7 @@ Implementation plans live in `docs/plans/ui-shape.md` (asset-first nav + page sh
   - Agent WebSocket endpoint with per-agent API key auth (SHA-256, dual-key rotation)
   - Internal API routes (`/internal/v1/`) for backoffice access (API key auth)
   - Tenant status enforcement (active/suspended/inactive with 5s TTL cache)
-  - Scan lifecycle: scan_definition or ad-hoc scan → directive via Upstash Redis → agent executes → findings streamed back via WSS → stored in Postgres (`findings` table, unified across compliance + network)
+  - Scan lifecycle: scan_definition or ad-hoc scan → directive via Redis → agent executes → findings streamed back via WSS → stored in Postgres (`findings` table, unified across compliance + network)
   - Credential storage via the ADR 004 `credential_sources` abstraction (today: `static`; pluggable slots for AWS Secrets Manager / Vault / etc. in C1+). AES-256-GCM at rest using `CREDENTIAL_ENCRYPTION_KEY`. `credential_mappings` binds a source to specific assets/endpoints. `credential.fetch` slog audit event on every read.
   - Stuck scan cleanup: running scans fail automatically on agent disconnect
   - Dockerfile: multi-stage (golang:1.25-alpine → distroless)
@@ -211,19 +216,20 @@ Implementation plans live in `docs/plans/ui-shape.md` (asset-first nav + page sh
   - **Transactional email** via Resend (`internal/mailer`): invitation emails with single-use tokens, password-reset emails with 1h expiry. Falls back to a noop logger if no API key (local dev).
   - Dashboard with DC health cards, cross-DC tenant management
   - Dockerfile: multi-stage (golang → distroless for API, node → nginx for web)
-- **CI/CD** — GitHub Actions with path-based filtering for all components (DC API, agent, tenant web, backoffice API, backoffice web, Terraform). Docker image verify builds. Smoke test with fallback.
+- **CI/CD** — GitHub Actions on **self-hosted ARC runners** (`jtb75-arc`, autoscaling min1/max4). `build-and-push.yml`: push to main / `workflow_dispatch` → a `Detect Changes` job (paths-filter, runs in the `atlas/builder` container) gates four **kaniko** build jobs → push `zot.lan.ng20.org/silkstrand-{api,web,backoffice-api,backoffice-web}:sha-<short>` (+ `:main-latest`) → a `Bump GitOps Image Tags` job seds the `newTag` in `silkstrand-gitops` and pushes → Argo CD syncs. Build-once-promote-by-SHA preserved. `ci.yml` (PR lint/test/build-verify) remains; `destroy.yml`, `release-agent.yml`, `release-pd-tools.yml` remain. Old GCP `deploy-stage.yml`/`deploy-prod.yml` retired.
+- **GitOps** — App manifests in `jtb75-org/silkstrand-gitops` (Kustomize: `apps/<ns>/overlays/onprem` over a `base/components/*`). Argo CD auto-syncs; parent Argo Application registered in `jtb75-org/argocd-apps`. Each `dc-*` self-registers with the backoffice via an Argo **PostSync Job** running `backoffice-api register-dc`.
 - **Seed Tooling** — SQL seeds for DC + backoffice databases, runner script, JWT generator, bcrypt hash helper. `make seed`, `make jwt`.
-- **Terraform** — Backoffice services (API + web Cloud Run, second database) defined in prod environment alongside DC services. Shared Cloud SQL instance.
+- **Terraform** — OpenTofu modules retained for residual GCP infra (not yet decommissioned). App deploy is now Kustomize + Argo CD, not Terraform-provisioned Cloud Run.
 
 ### What's Deployed
 
-Both stage and prod are live. Cloud Run services in each project:
-- `silkstrand-api`, `silkstrand-web` (DC API + tenant frontend, both envs)
-- `backoffice-api`, `backoffice-web` (prod only — one backoffice manages all DCs)
+Everything runs on one self-hosted **k3s** cluster, Argo CD-synced from `silkstrand-gitops`. Per-namespace workloads:
+- `dc-us` namespace: `silkstrand-api`, `silkstrand-web` (DC API + tenant frontend) as k8s Deployments, plus a `silkstrand-redis` Deployment and a CloudNativePG `Cluster`.
+- `silkstrand-backoffice` namespace: `backoffice-api`, `backoffice-web` Deployments + its own CloudNativePG `Cluster` (no Redis). One backoffice manages all DCs.
 
-Shared per-env infra: Cloud SQL Postgres 16 (private IP only), Upstash Redis, GCS bundles bucket, serverless VPC connector, DNS via Cloudflare.
+Per-namespace infra: CloudNativePG Postgres 16 (`storageClass: longhorn`), self-hosted Redis (DC namespaces only), in-cluster bundles (MinIO). Ingress via Cloudflare DNS + cloudflared tunnel + traefik + cert-manager. Platform images pulled from `zot.lan.ng20.org` using a per-namespace `zot-pull` dockerconfigjson SealedSecret.
 
-All sensitive Cloud Run env vars (DATABASE_URL, REDIS_URL, JWT_SECRET, INTERNAL_API_KEY, CREDENTIAL_ENCRYPTION_KEY, backoffice JWT/ENCRYPTION_KEY/TENANT_JWT_SECRET/RESEND_API_KEY/BOOTSTRAP_ADMIN_PASSWORD) are mounted via `secret_key_ref` from GCP Secret Manager — values never appear in `gcloud run services describe` output. Provisioned by Terraform.
+Secrets are managed by **OpenBao** + **External Secrets Operator**: values live under `secret/silkstrand/*` in OpenBao (KV v2), and per-namespace `ExternalSecret`s sync them into native k8s Secrets that the app consumes as plain env vars (DATABASE_URL comes from the CNPG `<cluster>-app` secret instead). GCP Secret Manager and WIF are gone. Sealed-secrets is used only for the `zot-pull` pull-secret and an OpenBao bridge secret.
 
 ### What's Not Built Yet
 
@@ -400,12 +406,12 @@ Server sends WebSocket pings every 30s; agent responds with pong (60s timeout).
 ## Architectural Principles
 
 1. **Data never leaves the customer network** — raw config data stays on-prem. Only structured results (pass/fail, evidence snippets) traverse the tunnel.
-2. **Data residency** — each data center is a regional deployment. EU data stays in EU. Backoffice manages across DCs without direct DB access.
+2. **Data residency (relaxed, logical for now)** — DCs are currently logical namespaces in one k3s cluster (pseudo-DC); per-namespace DB isolation is the boundary. True per-region residency returns by promoting a namespace to its own regional cluster. Backoffice manages across DCs without direct DB access.
 3. **Outbound-only connectivity** — agents never require inbound firewall rules. WSS over 443, proxy-compatible.
-4. **Credential encryption at rest** — Pluggable resolver via `credential_sources` (ADR 004). Today: `static` source — AES-256-GCM in DC database, key from `CREDENTIAL_ENCRYPTION_KEY` (Secret Manager), decrypted before forwarding to agent over WSS. C1+: per-source agent-side resolution against AWS Secrets Manager / Vault / etc., zero plaintext at rest.
+4. **Credential encryption at rest** — Pluggable resolver via `credential_sources` (ADR 004). Today: `static` source — AES-256-GCM in DC database, key from `CREDENTIAL_ENCRYPTION_KEY` (per-namespace, sourced from OpenBao via ESO), decrypted before forwarding to agent over WSS. C1+: per-source agent-side resolution against AWS Secrets Manager / Vault / etc., zero plaintext at rest.
 5. **Framework-agnostic execution** — polyglot bundle runtime. Bundle authors choose their assessment language; standardized JSON output schema is the contract.
 6. **Thin agent, smart bundles** — agent is tunnel + runner + cache. All compliance logic lives in updateable bundles.
-7. **Cost-minimal by default** — serverless-first (Cloud Run, Upstash). Scale to zero. No always-on infrastructure beyond Cloud SQL.
+7. **Self-hosted homelab-first** — runs on owned hardware (one k3s cluster) rather than serverless cloud. No per-request cloud billing; capacity is the homelab's. Resource-frugal by default (modest replica counts, scale-down where idle), with managed-operator building blocks (CNPG, OpenBao, Argo CD) keeping ops load low.
 8. **Single-person sustainability** — boring technology, minimal dependencies, one language (Go) on the backend.
 
 ## Coding Conventions
@@ -445,41 +451,47 @@ Server sends WebSocket pings every 30s; agent responds with pong (60s timeout).
 - Commits: conventional commits format (`feat:`, `fix:`, `docs:`, etc.)
 - Branches: `feature/`, `fix/`, `docs/` prefixes
 - PRs: require description of what and why
-- No secrets in code — use environment variables or Secret Manager
+- No secrets in code — use environment variables (sourced from OpenBao via ESO in-cluster)
 
 ## Key Design Decisions
 
 - **Per-agent API keys**: Each agent gets a unique 256-bit key (SHA-256 hashed in DB). Dual-key rotation via `key_hash` + `next_key_hash`. Constant-time comparison.
 - **Tenant status enforcement**: Middleware checks tenant status with 5s TTL cache. Suspended tenants get 403 on all API routes and agent WSS connections.
-- **Backoffice in prod project**: Runs as additional Cloud Run services in `silkstrand-prod` — not a separate GCP project. Uses second database on the same Cloud SQL instance ($0 extra). One backoffice manages all DCs (stage, prod, future regions).
+- **Backoffice as a namespace**: Runs in its own `silkstrand-backoffice` namespace in the same k3s cluster as the DCs — not a separate cluster/project. Gets its own CloudNativePG `Cluster`. One backoffice manages all DCs (current `dc-us`, future `dc-*`).
+- **Pseudo-DC via namespaces + in-cluster DNS**: The backoffice/DC split (Option A) is kept, but the backoffice addresses each DC by in-cluster service DNS (e.g. `http://silkstrand-api.dc-us.svc.cluster.local:8080`) instead of a public URL. DC self-registration runs as an Argo PostSync Job (`backoffice-api register-dc`), replacing the manual admin POST to `/api/v1/data-centers`.
 - **Two-phase tenant provisioning**: Create in backoffice DB first (provisioning_status=pending), then call DC API. On failure, mark as failed with retry option. Returns 202 (not 201) on DC provisioning failure.
-- **Credential encryption at rest**: AES-256-GCM with `CREDENTIAL_ENCRYPTION_KEY` env var. DC API decrypts before sending to agent. No encryption key = passthrough (dev only). Post-MVP: tenant-configurable credential sources (Vault, CyberArk, etc.).
+- **Credential encryption at rest**: AES-256-GCM with `CREDENTIAL_ENCRYPTION_KEY` env var (per-namespace, synced from OpenBao via ESO). DC API decrypts before sending to agent. No encryption key = passthrough (dev only). Post-MVP: tenant-configurable credential sources (Vault, CyberArk, etc.).
 - **In-house tenant auth over Clerk**: Replaced Clerk with bcrypt + HS256 JWTs. Rationale: B2B model with admin-managed invitations, small user counts, Clerk's embedded UI was too hard to customize (CSS hacks to hide "Leave organization", no server-side toggle), external dependency per sign-in, and we already had the Go auth plumbing for backoffice admins. DC API validates `TENANT_JWT_SECRET`-signed tokens; tenant frontend hits backoffice for `/api/v1/tenant-auth/*` (via nginx split) and DC for everything else. Multi-tenant membership is native (one user, many tenants) via the `memberships` table + `<TenantSwitcher />`.
 - **Stuck scan cleanup**: Running/pending scans automatically fail when agent disconnects.
-- **Upstash Redis over self-hosted Redis**: Eliminates idle cost. See `docs/adr/001-upstash-over-redis.md`.
-- **Artifact Registry over GHCR**: Cloud Run compatibility. Images at `us-central1-docker.pkg.dev/silkstrand-{env}/silkstrand/`.
-- **Cloud Run domain mapping**: Custom domains use `ghs.googlehosted.com` CNAME with Google-managed TLS.
-- **Cloud SQL private IP only**: Cloud Run reaches DB via Serverless VPC Access connector.
+- **Self-hosted Redis on k3s**: One Redis Deployment per `dc-*` namespace (replaces Upstash; the original Upstash decision in `docs/adr/001-upstash-over-redis.md` is now superseded by the homelab move). `redis.ParseURL` handles the in-cluster `redis://…svc.cluster.local:6379` URL unchanged — pubsub code untouched.
+- **zot OCI registry, split LAN/public**: `zot.lan.ng20.org` for in-cluster platform image pulls (kaniko pushes here); `zot.ng20.org` (public Cloudflare ingress) for the customer agent image `zot.ng20.org/silkstrand-agent`, since agents run in customer networks and can't reach the LAN registry. Pulls use a per-namespace `zot-pull` dockerconfigjson SealedSecret.
+- **CNPG per-namespace database**: CloudNativePG runs one `Cluster` per namespace (instance-per-DC; backoffice gets its own), `storageClass: longhorn`. No row-level security — per-namespace DB isolation is the tenant/DC boundary. App reads `DATABASE_URL` from the CNPG-generated `<cluster>-app` secret's `uri` key.
+- **Secrets via OpenBao + ESO**: Source of truth is OpenBao (KV v2 at `secret/silkstrand/*`); ESO `ClusterSecretStore` `openbao-kv` projects per-namespace `ExternalSecret`s into native k8s Secrets, so apps consume plain env vars with zero code change. `secret/silkstrand/shared/tenant-jwt` feeds both the backoffice `TENANT_JWT_SECRET` and each DC's `JWT_SECRET`; `secret/silkstrand/dc/<region>/internal-api-key` is read by the DC ns as `INTERNAL_API_KEY` and by the backoffice as `DC_INTERNAL_API_KEY`.
+- **Ingress / outbound-only preserved**: Cloudflare DNS + cloudflared tunnel + traefik + cert-manager front the cluster; agents still connect outbound over WSS/443.
 - **First benchmark**: CIS PostgreSQL 16 — 8 controls showcasing the authenticated scan pipeline.
 
 ## Branching & Deployment
 
 - No direct commits to `main` — all changes via `feature/` or `fix/` branches with PR
-- PR triggers CI: lint, test, build verify, Terraform plan
-- CI uses path-based filtering: Go/web/terraform/docker jobs only run when relevant files change
-- Merge to `main` auto-deploys to `silkstrand-stage`
-- Git tag (`v*`) promotes to `silkstrand-prod`
-- Agent binary cross-compiled and attached to GitHub Release on tag
-- GCP auth via Workload Identity Federation (no service account keys)
-- Terraform state in GCS: `gs://silkstrand-{stage,prod}-tfstate/`
+- PR triggers `ci.yml`: lint, test, build verify (runs on the `jtb75-arc` self-hosted ARC runners)
+- CI uses path-based filtering (`Detect Changes` paths-filter job): build jobs only run when relevant files change
+- Merge to `main` (or `workflow_dispatch`) runs `build-and-push.yml`: kaniko builds → push to `zot.lan.ng20.org` (`:sha-<short>` + `:main-latest`) → bump `newTag` in `jtb75-org/silkstrand-gitops` → **Argo CD auto-syncs** to the cluster. No more GCP stage/prod or git-tag promotion for platform services. Build-once-promote-by-SHA preserved.
+- Agent binary cross-compiled and attached to GitHub Release on tag (`release-agent.yml`); customer agent image published to public `zot.ng20.org`
+- CI auth: GitHub → zot via `ZOT_USERNAME`/`ZOT_PASSWORD`; GitOps repo writes via `GITOPS_DEPLOY_TOKEN`. WIF/service-account keys gone.
+- `destroy.yml` retained to tear down residual (not-yet-decommissioned) GCP infra
 - See `docs/cicd.md` for full details
 
-## GCP Projects
+## Environments (k3s namespaces)
 
-| Environment | Project ID | Deploy Trigger | Purpose |
-|-------------|-----------|----------------|---------|
-| Stage | `silkstrand-stage` | Auto on merge to `main` | DC stage deployment |
-| Prod | `silkstrand-prod` | Manual via git tag `v*` | DC prod + backoffice (one backoffice manages all DCs) |
+One self-hosted k3s cluster; "environments" are namespaces, all Argo CD-managed (no stage/prod GCP projects).
+
+| Namespace | Deploy Trigger | Purpose |
+|-----------|----------------|---------|
+| `silkstrand-backoffice` | Merge to `main` → CI → gitops bump → Argo sync | Backoffice API + web + its own CNPG cluster (manages all DCs) |
+| `dc-us` | Same (Argo CD auto-sync) | DC API + tenant web + Redis + CNPG cluster |
+| `dc-*` (future) | Same | Additional data centers; each self-registers via Argo PostSync `register-dc` |
+
+GCP infra is not yet decommissioned (`destroy.yml` available to tear it down).
 
 ## Local Development
 
@@ -556,22 +568,23 @@ curl -s localhost:8080/api/v1/scans/<scan_id> -H "Authorization: Bearer $TOKEN" 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | Server port |
-| `DATABASE_URL` | `postgres://...localhost:5432/silkstrand` | Postgres connection |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing key |
-| `INTERNAL_API_KEY` | (none) | API key for backoffice access |
-| `CREDENTIAL_ENCRYPTION_KEY` | (none) | 64 hex chars (32 bytes) for AES-256-GCM |
+| `DATABASE_URL` | `postgres://...localhost:5432/silkstrand` | Postgres connection. In-cluster: from the CNPG `<cluster>-app` secret's `uri` key. |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection. In-cluster: `redis://silkstrand-redis.<ns>.svc.cluster.local:6379` (plain env). |
+| `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing key. In-cluster: from OpenBao `secret/silkstrand/shared/tenant-jwt` via ESO. |
+| `INTERNAL_API_KEY` | (none) | API key for backoffice access. In-cluster: OpenBao `secret/silkstrand/dc/<region>/internal-api-key` via ESO. |
+| `CREDENTIAL_ENCRYPTION_KEY` | (none) | 64 hex chars (32 bytes) for AES-256-GCM. In-cluster: OpenBao `secret/silkstrand/dc/<region>/credential-encryption-key` via ESO. |
 
 ### Backoffice API
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8081` | Server port |
-| `DATABASE_URL` | `postgres://...localhost:15433/silkstrand_backoffice` | Postgres connection |
-| `JWT_SECRET` | `dev-secret-change-in-production` | Backoffice **admin** JWT signing key |
-| `ENCRYPTION_KEY` | (none) | 64 hex chars for DC API key encryption |
-| `TENANT_JWT_SECRET` | `dev-secret-change-in-production` | HS256 signing key for tenant user JWTs. Must match DC's `JWT_SECRET`. |
-| `RESEND_API_KEY` | (none) | Resend transactional email API key. Empty = noop mailer (logs to stdout). |
+| `DATABASE_URL` | `postgres://...localhost:15433/silkstrand_backoffice` | Postgres connection. In-cluster: from the backoffice CNPG `<cluster>-app` secret. |
+| `JWT_SECRET` | `dev-secret-change-in-production` | Backoffice **admin** JWT signing key. In-cluster: OpenBao `secret/silkstrand/backoffice/jwt` via ESO. |
+| `ENCRYPTION_KEY` | (none) | 64 hex chars for DC API key encryption. In-cluster: OpenBao `secret/silkstrand/backoffice/encryption-key` via ESO. |
+| `DC_INTERNAL_API_KEY` | (none) | API key the backoffice uses to call each DC's `/internal/v1/`. In-cluster: OpenBao `secret/silkstrand/dc/<region>/internal-api-key` (same path the DC reads as `INTERNAL_API_KEY`). |
+| `TENANT_JWT_SECRET` | `dev-secret-change-in-production` | HS256 signing key for tenant user JWTs. Must match DC's `JWT_SECRET`. In-cluster: OpenBao `secret/silkstrand/shared/tenant-jwt` via ESO. |
+| `RESEND_API_KEY` | (none) | Resend transactional email API key. Empty = noop mailer (logs to stdout). In-cluster: OpenBao `secret/silkstrand/backoffice/resend` via ESO. |
 | `FROM_EMAIL` | `SilkStrand <noreply@silkstrand.io>` | From address for invites / password resets |
 | `TENANT_WEB_URL` | `http://localhost:5173` | Base URL used to build invite / reset links in emails |
 
@@ -586,25 +599,21 @@ curl -s localhost:8080/api/v1/scans/<scan_id> -H "Authorization: Bearer $TOKEN" 
 | `SILKSTRAND_LOG_LEVEL` | `info` | Log level |
 | `SILKSTRAND_NAABU_SCAN_TYPE` | (none) | Override naabu scan type (e.g. `c` for connect-scan in unprivileged containers) |
 | `SILKSTRAND_SCAN_ALLOWLIST_PATH` | `/etc/silkstrand/scan-allowlist.yaml` | Path to customer scan allowlist file |
-| `SILKSTRAND_RUNTIMES_DIR` | (none) | Local directory for recon tool binaries (airgapped/test; skips GCS download) |
+| `SILKSTRAND_RUNTIMES_DIR` | (none) | Local directory for recon tool binaries (airgapped/test; skips remote download). NOTE: default download still pulls recon runtimes from `storage.googleapis.com` — not yet migrated off GCS. |
 
 ## GitHub Secrets & Variables
 
+CI only needs registry + GitOps credentials now; all **application** secrets live in OpenBao (synced into the cluster by ESO), not in GitHub Actions or GCP Secret Manager.
+
 ### Secrets
-- `CLOUDFLARE_API_TOKEN` — DNS management for silkstrand.io
-- `UPSTASH_REDIS_URL_STAGE` / `UPSTASH_REDIS_URL_PROD` — Upstash Redis connection URLs (DC API only)
-- `JWT_SECRET_STAGE` / `JWT_SECRET_PROD` — DC API JWT signing keys
-- `INTERNAL_API_KEY_PROD` — API key for backoffice → DC internal API access
-- `BACKOFFICE_JWT_SECRET` — Backoffice admin JWT signing key
-- `BACKOFFICE_ENCRYPTION_KEY` — AES-256 key for DC API key encryption in backoffice DB (64 hex chars)
-- `CREDENTIAL_ENCRYPTION_KEY_STAGE` / `CREDENTIAL_ENCRYPTION_KEY_PROD` — AES-256 key for credential encryption. Stored in GCP Secret Manager (`credential-encryption-key-{env}`); Cloud Run mounts via `secret_key_ref`. Never set as a plain Cloud Run env var — use Terraform.
-- `TENANT_JWT_SECRET` — HS256 signing key for tenant user JWTs. Shared: backoffice signs, every DC validates. `openssl rand -hex 32`.
-- `RESEND_API_KEY` — Resend API key for transactional email
+- `ZOT_USERNAME` — zot registry username (kaniko push from CI)
+- `ZOT_PASSWORD` — zot registry password
+- `GITOPS_DEPLOY_TOKEN` — write token for the `jtb75-org/silkstrand-gitops` repo (the `Bump GitOps Image Tags` job pushes `newTag` updates)
+
+App secrets (`JWT_SECRET`, `INTERNAL_API_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, backoffice `JWT`/`ENCRYPTION_KEY`/`RESEND_API_KEY`/bootstrap-admin, shared `TENANT_JWT_SECRET`) now live in OpenBao under `secret/silkstrand/*` and reach the cluster via ESO — no longer GitHub Actions secrets. The old GCP/WIF, Upstash, and per-env JWT/credential-key secrets are gone.
 
 ### Variables
-- `WIF_PROVIDER_STAGE` / `WIF_PROVIDER_PROD` — Workload Identity Federation provider names
-- `WIF_SA_STAGE` / `WIF_SA_PROD` — GitHub Actions service account emails
-- `CLOUDFLARE_ZONE_ID` — Zone ID for silkstrand.io
+- (none required for deploy — WIF provider/SA variables removed; deploy is Argo CD GitOps, not GitHub→GCP)
 
 ## Database Migrations
 
