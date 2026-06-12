@@ -34,13 +34,13 @@ func DetermineCollector(targetType string) string {
 	return collectorMap[strings.ToLower(targetType)]
 }
 
-// collectorRuntimesBaseURL is the public GCS bucket hosting collector
+// collectorRuntimesBaseURL is the public MinIO bucket hosting collector
 // binaries. Shares the same bucket as the PD recon tools.
 var collectorRuntimesBaseURL = func() string {
 	if v := os.Getenv("SILKSTRAND_RUNTIMES_BASE_URL"); v != "" {
 		return v
 	}
-	return "https://s3.ng20.org/silkstrand-runtimes"
+	return "https://downloads.silkstrand.io/runtimes"
 }()
 
 // collectorRuntimesDir is where cached collector binaries live on disk.
@@ -55,10 +55,10 @@ var collectorRuntimesDir = func() string {
 var collectorMu sync.Mutex
 
 // EnsureCollector returns the absolute path to a collector binary,
-// downloading from GCS on first use. Falls back to $PATH and the
+// downloading from MinIO on first use. Falls back to $PATH and the
 // bundles directory if the download is unavailable (local dev).
 //
-// The binary name on disk and in GCS follows the pattern:
+// The binary name on disk and in MinIO follows the pattern:
 //
 //	{collectorID}-{os}-{arch}   e.g. mssql-collector-darwin-arm64
 //
@@ -81,14 +81,14 @@ func EnsureCollector(collectorID string) (string, error) {
 		return cachedPath, nil
 	}
 
-	// 2. Try downloading from GCS.
+	// 2. Try downloading from MinIO.
 	url := fmt.Sprintf("%s/collectors/%s", collectorRuntimesBaseURL, binaryName)
 	shaURL := url + ".sha256"
 
 	if path, err := downloadCollector(url, shaURL, cacheDir, binaryName); err == nil {
 		return path, nil
 	} else {
-		slog.Debug("collector GCS download unavailable, trying fallbacks",
+		slog.Debug("collector MinIO download unavailable, trying fallbacks",
 			"collector", collectorID, "error", err)
 	}
 
@@ -113,11 +113,11 @@ func EnsureCollector(collectorID string) (string, error) {
 		return localPathShort, nil
 	}
 
-	return "", fmt.Errorf("collector %s not found (checked cache, GCS, PATH, bundles)", collectorID)
+	return "", fmt.Errorf("collector %s not found (checked cache, MinIO, PATH, bundles)", collectorID)
 }
 
 // downloadCollector fetches a collector binary + its .sha256 sidecar from
-// GCS, verifies the hash, and stores it in cacheDir.
+// MinIO, verifies the hash, and stores it in cacheDir.
 func downloadCollector(url, shaURL, cacheDir, binaryName string) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
 

@@ -17,14 +17,14 @@ import (
 	"time"
 )
 
-// runtimesBaseURL is the public GCS bucket hosting PD binaries +
-// curated nuclei-templates tarballs. Created in PR #1 (infra), seeded
-// in PR #6 (binaries).
+// runtimesBaseURL is the public download URL (downloads.silkstrand.io,
+// backed by MinIO) hosting PD binaries + curated nuclei-templates tarballs.
+// Override via SILKSTRAND_RUNTIMES_BASE_URL for airgapped/test mirrors.
 var runtimesBaseURL = func() string {
 	if v := os.Getenv("SILKSTRAND_RUNTIMES_BASE_URL"); v != "" {
 		return v
 	}
-	return "https://s3.ng20.org/silkstrand-runtimes"
+	return "https://downloads.silkstrand.io/runtimes"
 }()
 
 // runtimesDir is where installed binaries live on disk. Override via

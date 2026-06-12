@@ -252,7 +252,7 @@ type DownloadInfo struct {
 func (h *AgentsHandler) Downloads(w http.ResponseWriter, r *http.Request) {
 	base := h.releasesURL
 	if base == "" {
-		base = "https://s3.ng20.org/silkstrand-agent-releases"
+		base = "https://downloads.silkstrand.io/agent"
 	}
 	info := DownloadInfo{
 		Version:       "latest",
@@ -389,7 +389,7 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 
 	h.audit.Emit(r.Context(), audit.Event{
 		TenantID: tenantID, EventType: audit.EventAgentCreated,
-		ActorType: audit.ActorSystem,
+		ActorType:    audit.ActorSystem,
 		ResourceType: "agent", ResourceID: agent.ID,
 		Payload: map[string]any{"name": req.Name, "via": "bootstrap"},
 	})
@@ -428,7 +428,7 @@ func (h *AgentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := h.releasesURL
 	if baseURL == "" {
-		baseURL = "https://s3.ng20.org/silkstrand-agent-releases"
+		baseURL = "https://downloads.silkstrand.io/agent"
 	}
 
 	payload, _ := json.Marshal(websocket.UpgradePayload{
