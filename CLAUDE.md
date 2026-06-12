@@ -476,6 +476,7 @@ Server sends WebSocket pings every 30s; agent responds with pong (60s timeout).
 - PR triggers `ci.yml`: lint, test, build verify (runs on the `jtb75-arc` self-hosted ARC runners)
 - CI uses path-based filtering (`Detect Changes` paths-filter job): build jobs only run when relevant files change
 - Merge to `main` (or `workflow_dispatch`) runs `build-and-push.yml`: kaniko builds → push to `zot.lan.ng20.org` (`:sha-<short>` + `:main-latest`) → bump `newTag` in `jtb75-org/silkstrand-gitops` → **Argo CD auto-syncs** to the cluster. No more GCP stage/prod or git-tag promotion for platform services. Build-once-promote-by-SHA preserved.
+  - **Known gotcha:** Argo CD's git cache can go stale and report `Synced/Healthy` against a previous gitops revision, so a fresh `bump-gitops` commit may not roll out until Argo is **hard-refreshed** (observed twice — backoffice stayed on the old image tag until a manual refresh). If a merge built green but the cluster still runs the old `sha-…`, hard-refresh the Argo app rather than assuming the deploy failed.
 - Agent binary cross-compiled and attached to GitHub Release on tag (`release-agent.yml`); customer agent image published to public `zot.ng20.org`
 - CI auth: GitHub → zot via `ZOT_USERNAME`/`ZOT_PASSWORD`; GitOps repo writes via `GITOPS_DEPLOY_TOKEN`. WIF/service-account keys gone.
 - `destroy.yml` retained to tear down residual (not-yet-decommissioned) GCP infra
