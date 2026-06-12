@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -189,7 +191,12 @@ func (h *TenantHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.PathValue("id")
 	inviteID := r.PathValue("inviteId")
 	if err := h.store.DeleteInvitation(r.Context(), inviteID, tenantID); err != nil {
-		writeError(w, http.StatusNotFound, "invitation not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "invitation not found")
+			return
+		}
+		slog.Error("deleting invitation", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to revoke invitation")
 		return
 	}
 	audit.Log(r.Context(), h.store, r, audit.Entry{

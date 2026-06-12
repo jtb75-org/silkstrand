@@ -177,14 +177,18 @@ export function listTenantInvites(
 
 export function createTenantInvite(
   tenantId: string, req: TenantInvite,
-): Promise<{ status: string; error?: string }> {
+): Promise<import('./types').InviteSendResult> {
   return request(`/api/v1/tenants/${tenantId}/invites`, {
     method: 'POST',
     body: JSON.stringify(req),
   });
 }
 
-export function resendTenantInvite(tenantId: string, inviteId: string): Promise<void> {
+// Resolves to undefined on 204 (email sent) or an InviteSendResult on 202
+// (token rotated but email disabled/failed).
+export function resendTenantInvite(
+  tenantId: string, inviteId: string,
+): Promise<import('./types').InviteSendResult | void> {
   return request(`/api/v1/tenants/${tenantId}/invites/${inviteId}/resend`, {
     method: 'POST',
   });

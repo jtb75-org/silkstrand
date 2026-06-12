@@ -162,30 +162,64 @@ function UsersTab({
   const [showInvite, setShowInvite] = useState(false);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<InviteRole>('member');
+  // Non-fatal delivery warning: the invite was created/rotated but no email
+  // was actually sent (backend 202). Persists until the operator dismisses it.
+  const [notice, setNotice] = useState<string | null>(null);
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: ['tenant-members', tenantId] });
     queryClient.invalidateQueries({ queryKey: ['tenant-invites', tenantId] });
   }
 
+  function deliveryFailed(status: string): boolean {
+    return status !== 'invited';
+  }
+
   const createMutation = useMutation({
     mutationFn: () => createTenantInvite(tenantId, { email: email.trim().toLowerCase(), role }),
-    onSuccess: () => {
-      setEmail('');
-      setRole('member');
-      setShowInvite(false);
+    onSuccess: (result) => {
+      const addr = email.trim().toLowerCase();
       invalidate();
+      if (deliveryFailed(result.status)) {
+        // Invite row exists but the email did not go out — keep the operator
+        // informed; don't pretend it succeeded.
+        setNotice(
+          `Invite for ${addr} was created, but the email was NOT delivered ` +
+          `(${result.status}${result.error ? `: ${result.error}` : ''}). ` +
+          `The recipient will not receive a link.`,
+        );
+      } else {
+        setNotice(null);
+        setEmail('');
+        setRole('member');
+        setShowInvite(false);
+      }
     },
   });
 
   const resendMutation = useMutation({
     mutationFn: (inviteId: string) => resendTenantInvite(tenantId, inviteId),
-    onSuccess: invalidate,
+    onSuccess: (result) => {
+      invalidate();
+      // 204 → undefined (sent); 202 → result (token rotated, email failed).
+      if (result && deliveryFailed(result.status)) {
+        setNotice(
+          `The invite was regenerated, but the email was NOT delivered ` +
+          `(${result.status}${result.error ? `: ${result.error}` : ''}). ` +
+          `The previous link is now invalid, so the recipient has no working link.`,
+        );
+      } else {
+        setNotice(null);
+      }
+    },
   });
 
   const revokeMutation = useMutation({
     mutationFn: (inviteId: string) => deleteTenantInvite(tenantId, inviteId),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setNotice(null);
+      invalidate();
+    },
   });
 
   const empty = members.length === 0 && invites.length === 0;
@@ -198,6 +232,13 @@ function UsersTab({
           {showInvite ? 'Cancel' : 'Invite User'}
         </button>
       </div>
+
+      {notice && (
+        <div className="banner banner-warn" role="alert">
+          <span>{notice}</span>
+          <button className="btn btn-sm" onClick={() => setNotice(null)}>Dismiss</button>
+        </div>
+      )}
 
       {showInvite && (
         <form

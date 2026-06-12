@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -242,6 +244,32 @@ func TestDeleteInvitePassesTenantBoundary(t *testing.T) {
 	}
 	if st.deletedID != "inv-9" || st.deletedTen != "t1" {
 		t.Errorf("DeleteInvitation(id=%q, tenant=%q), want (inv-9, t1)", st.deletedID, st.deletedTen)
+	}
+}
+
+func TestDeleteInviteNotFound(t *testing.T) {
+	st := &inviteStubStore{deleteErr: sql.ErrNoRows}
+	h := newInviteHandler(st, &recordingMailer{})
+	r := adminReq(http.MethodDelete, "/api/v1/tenants/t1/invites/missing", "")
+	r.SetPathValue("id", "t1")
+	r.SetPathValue("inviteId", "missing")
+	w := httptest.NewRecorder()
+	h.DeleteInvite(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for ErrNoRows", w.Code)
+	}
+}
+
+func TestDeleteInviteStoreError(t *testing.T) {
+	st := &inviteStubStore{deleteErr: errors.New("connection reset")}
+	h := newInviteHandler(st, &recordingMailer{})
+	r := adminReq(http.MethodDelete, "/api/v1/tenants/t1/invites/inv-9", "")
+	r.SetPathValue("id", "t1")
+	r.SetPathValue("inviteId", "inv-9")
+	w := httptest.NewRecorder()
+	h.DeleteInvite(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for a transient store error", w.Code)
 	}
 }
 
