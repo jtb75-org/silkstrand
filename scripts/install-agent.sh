@@ -456,7 +456,10 @@ docker_build_run_args() {
     printf -- '-e SILKSTRAND_API_URL=%s ' "$WS_URL"
     printf -- '-e SILKSTRAND_RUNTIMES_DIR=/home/nonroot/runtimes '
     if [ "$DOCKER_CAPS" = "raw" ]; then
+        # Raw caps available → override the image's connect-scan default with
+        # the faster SYN scan.
         printf -- '--cap-add=NET_RAW --cap-add=NET_ADMIN '
+        printf -- '-e SILKSTRAND_NAABU_SCAN_TYPE=s '
     else
         printf -- '-e SILKSTRAND_NAABU_SCAN_TYPE=c '
     fi
@@ -521,7 +524,10 @@ services:
       SILKSTRAND_API_URL: ${WS_URL}
       SILKSTRAND_RUNTIMES_DIR: /home/nonroot/runtimes
 EOF
-    if [ "$DOCKER_CAPS" != "raw" ]; then
+    if [ "$DOCKER_CAPS" = "raw" ]; then
+        # Raw caps → override the image's connect-scan default with SYN scan.
+        printf '      SILKSTRAND_NAABU_SCAN_TYPE: s\n'
+    else
         printf '      SILKSTRAND_NAABU_SCAN_TYPE: c\n'
     fi
     printf '    volumes:\n'
