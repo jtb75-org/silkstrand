@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jtb75/silkstrand/api/internal/audit"
@@ -290,6 +292,22 @@ func (h *AgentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// discoverScheduleToCron maps the panel's recurrence choice (ADR 013 D5) to a
+// cron string for the auto-created discovery definition. nil = on-connect only.
+func discoverScheduleToCron(sched string) (*string, error) {
+	switch strings.ToLower(strings.TrimSpace(sched)) {
+	case "", "off":
+		return nil, nil
+	case "daily":
+		c := "0 3 * * *"
+		return &c, nil
+	case "weekly":
+		c := "0 3 * * 1"
+		return &c, nil
+	}
+	return nil, fmt.Errorf("discover_schedule must be off, daily, or weekly")
+}
+
 // POST /api/v1/agents/install-tokens (authenticated, tenant-scoped)
 // Body: {} (no fields yet)
 // Returns a one-time install token (1h, single-use) bound to this tenant.
@@ -299,6 +317,25 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 	if claims == nil || claims.TenantID == "" {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
+	}
+
+	// Optional auto-discover intent (ADR 013 D5). Body may be empty.
+	var req struct {
+		AutoDiscover     bool   `json:"auto_discover"`
+		DiscoverSchedule string `json:"discover_schedule"` // "" | off | daily | weekly
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var discoverCron *string
+	if req.AutoDiscover {
+		c, err := discoverScheduleToCron(req.DiscoverSchedule)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		discoverCron = c
 	}
 
 	plaintext, tokenHash, err := crypto.NewInstallToken()
@@ -314,7 +351,14 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 	} else if claims.UserID != "" {
 		createdBy = claims.UserID
 	}
-	if err := h.store.CreateInstallToken(r.Context(), claims.TenantID, tokenHash, expiresAt, createdBy); err != nil {
+	if err := h.store.CreateInstallToken(r.Context(), store.CreateInstallTokenInput{
+		TenantID:     claims.TenantID,
+		TokenHash:    tokenHash,
+		ExpiresAt:    expiresAt,
+		CreatedBy:    createdBy,
+		AutoDiscover: req.AutoDiscover,
+		DiscoverCron: discoverCron,
+	}); err != nil {
 		slog.Error("storing install token", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed")
 		return
@@ -365,7 +409,7 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	// field with a follow-up UPDATE once we have the real id. If the agent
 	// creation fails, the token is already used — that's a UX regression
 	// but not a security issue (admin just generates a new token).
-	tenantID, err := h.store.ConsumeInstallToken(r.Context(), hash, "00000000-0000-0000-0000-000000000000")
+	tok, err := h.store.ConsumeInstallToken(r.Context(), hash, "00000000-0000-0000-0000-000000000000")
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "install token invalid, expired, or already used")
@@ -377,9 +421,13 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent, rawKey, err := h.store.CreateAgent(r.Context(), model.CreateAgentRequest{
-		TenantID: tenantID,
+		TenantID: tok.TenantID,
 		Name:     req.Name,
 		Version:  req.Version,
+		// ADR 013 D5: carry the auto-discover intent onto the agent; it fires
+		// once on the agent's first allowlist snapshot.
+		AutoDiscoverPending: tok.AutoDiscover,
+		DiscoverCron:        tok.DiscoverCron,
 	})
 	if err != nil {
 		slog.Error("bootstrap: creating agent", "error", err)
@@ -388,7 +436,7 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit.Emit(r.Context(), audit.Event{
-		TenantID: tenantID, EventType: audit.EventAgentCreated,
+		TenantID: tok.TenantID, EventType: audit.EventAgentCreated,
 		ActorType:    audit.ActorSystem,
 		ResourceType: "agent", ResourceID: agent.ID,
 		Payload: map[string]any{"name": req.Name, "via": "bootstrap"},

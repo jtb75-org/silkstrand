@@ -54,8 +54,12 @@ type Store interface {
 	DeleteAgent(ctx context.Context, id string) error
 
 	// Install tokens
-	CreateInstallToken(ctx context.Context, tenantID string, tokenHash []byte, expiresAt time.Time, createdBy string) error
-	ConsumeInstallToken(ctx context.Context, tokenHash []byte, agentID string) (tenantID string, err error)
+	CreateInstallToken(ctx context.Context, in CreateInstallTokenInput) error
+	ConsumeInstallToken(ctx context.Context, tokenHash []byte, agentID string) (*ConsumedInstallToken, error)
+	// ClaimAutoDiscover atomically clears an agent's pending auto-discover
+	// flag and returns whether it was set (+ the recurring cron, if any).
+	// Fire-once: a second caller sees pending=false (ADR 013 D5).
+	ClaimAutoDiscover(ctx context.Context, agentID string) (pending bool, cron *string, err error)
 
 	// Bundles
 	GetBundle(ctx context.Context, id string) (*model.Bundle, error)
@@ -363,6 +367,27 @@ type CreateScanForDefinitionInput struct {
 	AssetEndpointID  *string
 	BundleID         *string
 	ScanType         string
+}
+
+// CreateInstallTokenInput carries a new install token plus the ADR 013 D5
+// auto-discover intent (copied onto the agent at bootstrap). DiscoverCron is
+// nil for a one-shot (on-connect only) discovery.
+type CreateInstallTokenInput struct {
+	TenantID     string
+	TokenHash    []byte
+	ExpiresAt    time.Time
+	CreatedBy    string
+	AutoDiscover bool
+	DiscoverCron *string
+}
+
+// ConsumedInstallToken is the record returned when an install token is
+// redeemed at bootstrap — the tenant plus the auto-discover intent to stamp
+// onto the new agent.
+type ConsumedInstallToken struct {
+	TenantID     string
+	AutoDiscover bool
+	DiscoverCron *string
 }
 
 // CreateCredentialMappingInput carries the three-way scope for a new

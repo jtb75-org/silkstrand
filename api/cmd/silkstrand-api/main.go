@@ -421,6 +421,9 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 
 		case websocket.TypeAllowlistSnapshot:
 			handleAllowlistSnapshot(ctx, s, agentID, msg.Payload)
+			// ADR 013 D5: the snapshot just landed, so an opted-in agent can
+			// now run its first discovery against a real allowlist.
+			maybeAutoDiscover(ctx, s, sched, agentID)
 
 		case websocket.TypeAssetDiscovered:
 			handleAssetDiscovered(ctx, s, notifier, sched, bus, auditW, agentID, msg.Payload)
@@ -630,6 +633,60 @@ func handleAllowlistSnapshot(ctx context.Context, s store.Store, agentID string,
 	// the provenance join table makes this a multi-step query. Per
 	// discovery, each endpoint is restamped with the fresh status
 	// naturally. If this becomes a UX gap we'll revisit.
+}
+
+// maybeAutoDiscover fires the discovery a tenant opted into at install time
+// (ADR 013 D5) — exactly once, after the agent's first allowlist snapshot, so
+// it resolves against real scope. ClaimAutoDiscover is the fire-once guard.
+func maybeAutoDiscover(ctx context.Context, s store.Store, sched scheduler.Dispatcher, agentID string) {
+	pending, cron, err := s.ClaimAutoDiscover(ctx, agentID)
+	if err != nil {
+		slog.Error("auto-discover: claim", "agent_id", agentID, "error", err)
+		return
+	}
+	if !pending {
+		return
+	}
+	agent, err := s.GetAgentByID(ctx, agentID)
+	if err != nil || agent == nil {
+		slog.Error("auto-discover: agent lookup", "agent_id", agentID, "error", err)
+		return
+	}
+	// A recurring def needs next_run_at seeded, or the scheduler (which claims
+	// schedule IS NOT NULL AND next_run_at IS NOT NULL) runs it once and never
+	// recurs — same initialization the scan-definition handler does.
+	var nextRun *time.Time
+	if cron != nil {
+		if c, perr := scheduler.ParseCron(*cron); perr == nil {
+			if n, nerr := c.Next(time.Now().UTC()); nerr == nil {
+				nextRun = &n
+			}
+		}
+	}
+	// CreateScanDefinition keys tenant off the ctx, but the WSS message ctx has
+	// none — scope it to the agent's tenant. Name is per-agent because
+	// scan_definitions is UNIQUE(tenant_id, name) (agents are not name-unique,
+	// so a duplicate-named agent is the one rare collision; it fails loudly).
+	cctx := store.WithTenantID(ctx, agent.TenantID)
+	created, err := s.CreateScanDefinition(cctx, model.ScanDefinition{
+		Name:      fmt.Sprintf("Auto-discovery (%s)", agent.Name),
+		Kind:      model.ScanDefinitionKindDiscovery,
+		ScopeKind: model.ScanDefinitionScopeAgentAllowlist,
+		AgentID:   &agentID,
+		Schedule:  cron, // nil = on-connect only; set = recurring (D5)
+		NextRunAt: nextRun,
+		Enabled:   true,
+	})
+	if err != nil {
+		slog.Error("auto-discover: creating definition", "agent_id", agentID, "error", err)
+		return
+	}
+	if err := sched.Execute(ctx, *created); err != nil {
+		slog.Warn("auto-discover: initial dispatch", "agent_id", agentID,
+			"definition", created.ID, "error", err)
+	}
+	slog.Info("auto-discover dispatched", "agent_id", agentID,
+		"definition", created.ID, "recurring", cron != nil)
 }
 
 // handleAgentLog receives the agent's {type:"agent_log"} WSS message,
