@@ -564,10 +564,34 @@ export const getAgentLogs = (agentId: string, params?: {
 export const createInstallToken = (opts?: {
   auto_discover?: boolean;
   discover_schedule?: 'off' | 'daily' | 'weekly';
+  zone?: string;
 }) =>
   request<{ install_token: string; expires_at: string }>('/api/v1/agents/install-tokens', {
     method: 'POST',
     body: JSON.stringify(opts ?? {}),
+  });
+
+// ADR 013 D6: install-time overlap heuristic. Warn (never block) when the
+// ranges about to be seeded overlap another agent that actually discovers.
+export interface AllowlistOverlap {
+  cidr: string;
+  conflicts_with: {
+    kind: string;
+    name: string;
+    id: string;
+    range: string;
+    zone: string | null;
+    discovery_enabled: boolean;
+  };
+}
+export interface AllowlistPreview {
+  overlaps: AllowlistOverlap[];
+  redundant: string[];
+}
+export const previewAllowlist = (cidrs: string[], zone?: string) =>
+  request<AllowlistPreview>('/api/v1/agents/allowlist-preview', {
+    method: 'POST',
+    body: JSON.stringify({ cidrs, zone }),
   });
 
 // Credentials (per-target)

@@ -1,0 +1,2 @@
+ALTER TABLE agents DROP COLUMN IF EXISTS zone;
+ALTER TABLE install_tokens DROP COLUMN IF EXISTS zone;
