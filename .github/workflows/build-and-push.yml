@@ -20,6 +20,8 @@ jobs:
   changes:
     name: Detect Changes
     runs-on: jtb75-arc
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
     outputs:
       api: ${{ steps.set.outputs.api }}
       web: ${{ steps.set.outputs.web }}
@@ -86,6 +88,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           git init "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
           git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
@@ -135,6 +138,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           git init "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
           git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
@@ -184,6 +188,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           git init "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
           git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
@@ -233,6 +238,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           git init "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git -C "${GITHUB_WORKSPACE}" remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git -C "${GITHUB_WORKSPACE}" fetch --depth=1 origin "${GITHUB_SHA}"
           git -C "${GITHUB_WORKSPACE}" checkout --force FETCH_HEAD
