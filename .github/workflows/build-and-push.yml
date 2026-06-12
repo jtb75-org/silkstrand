@@ -31,24 +31,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Filter changed paths
-        if: github.event_name == 'push'
-        id: filter
-        uses: dorny/paths-filter@v4
-        with:
-          base: ${{ github.event.before }}
-          filters: |
-            api:
-              - 'api/**'
-              - 'controls/**'
-            web:
-              - 'web/**'
-            backoffice_api:
-              - 'backoffice/**'
-              - '!backoffice/web/**'
-            backoffice_web:
-              - 'backoffice/web/**'
-
       - name: Set outputs
         id: set
         run: |
@@ -58,10 +40,36 @@ jobs:
             echo "backoffice_api=true" >> "$GITHUB_OUTPUT"
             echo "backoffice_web=true" >> "$GITHUB_OUTPUT"
           else
-            echo "api=${{ steps.filter.outputs.api }}" >> "$GITHUB_OUTPUT"
-            echo "web=${{ steps.filter.outputs.web }}" >> "$GITHUB_OUTPUT"
-            echo "backoffice_api=${{ steps.filter.outputs.backoffice_api }}" >> "$GITHUB_OUTPUT"
-            echo "backoffice_web=${{ steps.filter.outputs.backoffice_web }}" >> "$GITHUB_OUTPUT"
+            api=false
+            web=false
+            backoffice_api=false
+            backoffice_web=false
+
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > /tmp/changed-files
+            echo "Changed files:"
+            cat /tmp/changed-files
+
+            while IFS= read -r path; do
+              case "$path" in
+                api/*|controls/*)
+                  api=true
+                  ;;
+                web/*)
+                  web=true
+                  ;;
+                backoffice/web/*)
+                  backoffice_web=true
+                  ;;
+                backoffice/*)
+                  backoffice_api=true
+                  ;;
+              esac
+            done < /tmp/changed-files
+
+            echo "api=${api}" >> "$GITHUB_OUTPUT"
+            echo "web=${web}" >> "$GITHUB_OUTPUT"
+            echo "backoffice_api=${backoffice_api}" >> "$GITHUB_OUTPUT"
+            echo "backoffice_web=${backoffice_web}" >> "$GITHUB_OUTPUT"
           fi
 
   build-api:
