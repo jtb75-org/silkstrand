@@ -323,7 +323,7 @@ func (h *AssetHandler) ImportDNS(w http.ResponseWriter, r *http.Request) {
 			TenantID:     tenantID,
 			Hostname:     name,
 			ResourceType: model.ResourceTypeHTTPService,
-			Source:       "imported",
+			Source:       model.AssetSourceImported,
 		})
 		if err != nil {
 			slog.Error("import-dns: upserting asset", "name", name, "error", err)

@@ -230,6 +230,7 @@ const (
 
 	AssetSourceManual     = "manual"
 	AssetSourceDiscovered = "discovered"
+	AssetSourceImported   = "imported" // operator DNS-name import (ADR 014 D2)
 
 	// Per-endpoint allowlist classification (carried forward from ADR 003 D11).
 	AllowlistStatusAllowlisted = "allowlisted"
