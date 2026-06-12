@@ -5,11 +5,20 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jtb75/silkstrand/backoffice/internal/model"
 )
+
+// connectTimeout bounds how long NewPostgresStore retries the initial
+// connectivity check before giving up. On a fresh k3s rollout the database —
+// or the node-to-node route to its -rw service — can lag the app pod by a few
+// seconds; without patience here a one-shot like `register-dc` dies on the
+// first ping instead of riding out a transient, then re-rolls node placement
+// on every Job recreation.
+const connectTimeout = 30 * time.Second
 
 type PostgresStore struct {
 	db *sql.DB
@@ -25,11 +34,34 @@ func NewPostgresStore(databaseURL string) (*PostgresStore, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	if err := db.Ping(); err != nil {
+	if err := pingWithRetry(db, connectTimeout); err != nil {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
 	return &PostgresStore{db: db}, nil
+}
+
+// pingWithRetry pings the database until it succeeds or maxWait elapses, using
+// capped exponential backoff. It returns the last ping error on timeout so the
+// caller still surfaces the underlying cause.
+func pingWithRetry(db *sql.DB, maxWait time.Duration) error {
+	deadline := time.Now().Add(maxWait)
+	backoff := 500 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		err := db.Ping()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		slog.Warn("database not ready, retrying",
+			"attempt", attempt, "backoff", backoff.String(), "error", err)
+		time.Sleep(backoff)
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 func (s *PostgresStore) Close() error {
