@@ -134,6 +134,44 @@ func TestAllowlistPreview(t *testing.T) {
 			t.Fatalf("want 1 redundant note, got %d (%v)", len(out.Redundant), out.Redundant)
 		}
 	})
+
+	// oneAgentStore builds a tenant with a single discovering agent whose
+	// allowlist snapshot is `allow`.
+	oneAgentStore := func(zone string, allow ...string) *fakeAgentStore {
+		return &fakeAgentStore{
+			agents: []model.Agent{{ID: "ag", Name: "other", Zone: strptr(zone)}},
+			defs: []model.ScanDefinition{{
+				ID: "d", Kind: model.ScanDefinitionKindDiscovery,
+				ScopeKind: model.ScanDefinitionScopeAgentAllowlist,
+				AgentID:   strptr("ag"), Enabled: true,
+			}},
+			snaps: map[string]*store.AgentAllowlistSnapshot{"ag": {AgentID: "ag", Allow: allow}},
+		}
+	}
+
+	// Regression (nara P2 #1): a mixed supernet 10.0.0.0/7 spans public
+	// 11.0.0.0/8, so a cross-zone overlap with it must NOT be suppressed.
+	t.Run("mixed supernet does not suppress public overlap", func(t *testing.T) {
+		out := call(t, oneAgentStore("office-east", "11.0.0.0/8"), `{"cidrs":["10.0.0.0/7"],"zone":"office-west"}`)
+		if len(out.Overlaps) != 1 {
+			t.Fatalf("want 1 overlap (public not suppressed), got %d", len(out.Overlaps))
+		}
+	})
+
+	// Regression (nara P2 #2): "a-b" range entries must participate in overlap
+	// math, on both the input and the source side.
+	t.Run("range input overlaps cidr source", func(t *testing.T) {
+		out := call(t, oneAgentStore("z", "10.0.0.0/24"), `{"cidrs":["10.0.0.20-10.0.0.30"],"zone":"z"}`)
+		if len(out.Overlaps) != 1 {
+			t.Fatalf("want 1 overlap (range input parsed), got %d", len(out.Overlaps))
+		}
+	})
+	t.Run("range source overlaps cidr input", func(t *testing.T) {
+		out := call(t, oneAgentStore("z", "10.0.0.10-10.0.0.50"), `{"cidrs":["10.0.0.0/24"],"zone":"z"}`)
+		if len(out.Overlaps) != 1 {
+			t.Fatalf("want 1 overlap (range source parsed), got %d", len(out.Overlaps))
+		}
+	})
 }
 
 func TestDiscoverScheduleToCron(t *testing.T) {

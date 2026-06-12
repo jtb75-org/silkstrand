@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -412,7 +411,7 @@ type overlapSource struct {
 	ownerID  string
 	name     string
 	zone     *string
-	rng      *net.IPNet
+	iv       allowlist.Interval
 	rangeStr string
 }
 
@@ -440,19 +439,19 @@ func (h *AgentsHandler) AllowlistPreview(w http.ResponseWriter, r *http.Request)
 	inputZone := normalizeZone(req.Zone)
 
 	// Only address ranges participate; hostnames are skipped (no range to
-	// intersect). A bare IP is treated as a host route.
-	type parsedCIDR struct {
+	// intersect). CIDR, bare IP, and "a-b" range all reduce to an interval.
+	type parsedRange struct {
 		raw string
-		net *net.IPNet
+		iv  allowlist.Interval
 	}
-	var inputs []parsedCIDR
+	var inputs []parsedRange
 	for _, c := range req.CIDRs {
 		c = strings.TrimSpace(c)
 		if c == "" {
 			continue
 		}
-		if n := allowlist.ParseCIDROrIP(c); n != nil {
-			inputs = append(inputs, parsedCIDR{raw: c, net: n})
+		if iv, ok := allowlist.ParseInterval(c); ok {
+			inputs = append(inputs, parsedRange{raw: c, iv: iv})
 		}
 	}
 
@@ -462,11 +461,11 @@ func (h *AgentsHandler) AllowlistPreview(w http.ResponseWriter, r *http.Request)
 		for j := i + 1; j < len(inputs); j++ {
 			a, b := inputs[i], inputs[j]
 			switch {
-			case allowlist.Contains(a.net, b.net) && allowlist.Contains(b.net, a.net):
+			case a.iv.Contains(b.iv) && b.iv.Contains(a.iv):
 				redundant = append(redundant, fmt.Sprintf("%s duplicates %s", b.raw, a.raw))
-			case allowlist.Contains(a.net, b.net):
+			case a.iv.Contains(b.iv):
 				redundant = append(redundant, fmt.Sprintf("%s is contained in %s (also entered)", b.raw, a.raw))
-			case allowlist.Contains(b.net, a.net):
+			case b.iv.Contains(a.iv):
 				redundant = append(redundant, fmt.Sprintf("%s is contained in %s (also entered)", a.raw, b.raw))
 			}
 		}
@@ -478,13 +477,15 @@ func (h *AgentsHandler) AllowlistPreview(w http.ResponseWriter, r *http.Request)
 	seen := map[string]bool{}
 	for _, in := range inputs {
 		for _, src := range sources {
-			if !allowlist.Overlaps(in.net, src.rng) {
+			if !in.iv.Overlaps(src.iv) {
 				continue
 			}
 			// Zone-aware suppression (D10): only when both sides carry a zone,
-			// the zones differ, and the overlapping range is private. Public
-			// overlap, or any unset zone, always warns (conservative).
-			if inputZone != nil && src.zone != nil && *inputZone != *src.zone && allowlist.IsPrivate(in.net) {
+			// the zones differ, and *both* ranges are wholly private — so the
+			// shared addresses are private too. Public overlap (either side not
+			// wholly private), or any unset zone, always warns (conservative).
+			if inputZone != nil && src.zone != nil && *inputZone != *src.zone &&
+				in.iv.Private() && src.iv.Private() {
 				continue
 			}
 			key := in.raw + "|" + src.rangeStr + "|" + src.ownerID
@@ -534,11 +535,12 @@ func (h *AgentsHandler) discoverySources(ctx context.Context) []overlapSource {
 
 	var sources []overlapSource
 	snapCache := map[string]*store.AgentAllowlistSnapshot{}
-	add := func(agentID *string, rangeStr string, n *net.IPNet) {
-		if n == nil {
+	add := func(agentID *string, rangeStr string) {
+		iv, ok := allowlist.ParseInterval(rangeStr)
+		if !ok {
 			return
 		}
-		src := overlapSource{kind: "scan_definition", rng: n, rangeStr: rangeStr}
+		src := overlapSource{kind: "scan_definition", iv: iv, rangeStr: rangeStr}
 		if agentID != nil {
 			if a, ok := agentByID[*agentID]; ok {
 				src.kind = "agent"
@@ -559,7 +561,7 @@ func (h *AgentsHandler) discoverySources(ctx context.Context) []overlapSource {
 		switch d.ScopeKind {
 		case model.ScanDefinitionScopeCIDR:
 			if d.CIDR != nil {
-				add(d.AgentID, strings.TrimSpace(*d.CIDR), allowlist.ParseCIDROrIP(strings.TrimSpace(*d.CIDR)))
+				add(d.AgentID, strings.TrimSpace(*d.CIDR))
 			}
 		case model.ScanDefinitionScopeAgentAllowlist:
 			if d.AgentID == nil {
@@ -574,8 +576,7 @@ func (h *AgentsHandler) discoverySources(ctx context.Context) []overlapSource {
 				continue
 			}
 			for _, entry := range snap.Allow {
-				entry = strings.TrimSpace(entry)
-				add(d.AgentID, entry, allowlist.ParseCIDROrIP(entry))
+				add(d.AgentID, strings.TrimSpace(entry))
 			}
 		}
 	}

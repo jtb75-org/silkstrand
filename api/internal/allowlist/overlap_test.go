@@ -2,23 +2,35 @@ package allowlist
 
 import "testing"
 
-func TestParseCIDROrIP(t *testing.T) {
+func mustIv(t *testing.T, s string) Interval {
+	t.Helper()
+	iv, ok := ParseInterval(s)
+	if !ok {
+		t.Fatalf("ParseInterval(%q) = !ok", s)
+	}
+	return iv
+}
+
+func TestParseInterval(t *testing.T) {
 	cases := []struct {
-		in  string
-		nil bool
+		in string
+		ok bool
 	}{
-		{"10.0.0.0/24", false},
-		{"10.0.0.5", false},      // bare IPv4 -> /32
-		{"fc00::/7", false},      // IPv6 ULA
-		{"2001:db8::1", false},   // bare IPv6 -> /128
-		{"db.example.com", true}, // hostname -> no range
-		{"not a cidr", true},
-		{"", true},
+		{"10.0.0.0/24", true},
+		{"10.0.0.5", true},            // bare IPv4
+		{"10.0.0.10-10.0.0.50", true}, // range
+		{"10.0.0.50-10.0.0.10", true}, // reversed range tolerated
+		{"fc00::/7", true},            // IPv6 ULA
+		{"2001:db8::1", true},         // bare IPv6
+		{"db.example.com", false},     // hostname
+		{"not a cidr", false},
+		{"10.0.0.10-nope", false}, // bad range bound
+		{"", false},
 	}
 	for _, c := range cases {
-		got := ParseCIDROrIP(c.in)
-		if (got == nil) != c.nil {
-			t.Errorf("ParseCIDROrIP(%q): nil=%v want nil=%v", c.in, got == nil, c.nil)
+		_, ok := ParseInterval(c.in)
+		if ok != c.ok {
+			t.Errorf("ParseInterval(%q): ok=%v want %v", c.in, ok, c.ok)
 		}
 	}
 }
@@ -29,20 +41,19 @@ func TestOverlaps(t *testing.T) {
 		want bool
 	}{
 		{"10.0.0.0/24", "10.0.0.0/16", true}, // contained
-		{"10.0.0.0/16", "10.0.0.0/24", true}, // reverse containment
+		{"10.0.0.0/16", "10.0.0.0/24", true}, // reverse
 		{"10.0.0.0/24", "10.0.0.0/24", true}, // identical
 		{"10.0.0.0/24", "10.0.1.0/24", false},
 		{"10.0.0.0/8", "192.168.0.0/16", false},
 		{"203.0.113.0/24", "203.0.113.128/25", true},
+		{"10.0.0.0/24", "10.0.0.20-10.0.0.30", true},  // CIDR vs range
+		{"10.0.0.40-10.0.0.60", "10.0.0.0/26", true},  // range vs CIDR (.0-.63)
+		{"10.0.0.40-10.0.0.60", "10.0.0.0/27", false}, // range vs CIDR (.0-.31)
 	}
 	for _, c := range cases {
-		a, b := ParseCIDROrIP(c.a), ParseCIDROrIP(c.b)
-		if got := Overlaps(a, b); got != c.want {
+		if got := mustIv(t, c.a).Overlaps(mustIv(t, c.b)); got != c.want {
 			t.Errorf("Overlaps(%s,%s)=%v want %v", c.a, c.b, got, c.want)
 		}
-	}
-	if Overlaps(nil, ParseCIDROrIP("10.0.0.0/8")) {
-		t.Error("Overlaps(nil,...) should be false")
 	}
 }
 
@@ -52,35 +63,39 @@ func TestContains(t *testing.T) {
 		want         bool
 	}{
 		{"10.0.0.0/16", "10.0.0.0/24", true},
-		{"10.0.0.0/24", "10.0.0.0/16", false}, // inner bigger
-		{"10.0.0.0/24", "10.0.0.0/24", true},  // equal counts as contained
+		{"10.0.0.0/24", "10.0.0.0/16", false},
+		{"10.0.0.0/24", "10.0.0.0/24", true},
 		{"10.0.0.0/16", "10.1.0.0/24", false},
+		{"10.0.0.0/24", "10.0.0.10-10.0.0.50", true},
 	}
 	for _, c := range cases {
-		if got := Contains(ParseCIDROrIP(c.outer), ParseCIDROrIP(c.inner)); got != c.want {
+		if got := mustIv(t, c.outer).Contains(mustIv(t, c.inner)); got != c.want {
 			t.Errorf("Contains(%s,%s)=%v want %v", c.outer, c.inner, got, c.want)
 		}
 	}
 }
 
-func TestIsPrivate(t *testing.T) {
+func TestPrivate(t *testing.T) {
 	cases := []struct {
 		in   string
 		want bool
 	}{
 		{"10.0.0.0/24", true},
+		{"10.0.0.0/8", true},
+		{"10.0.0.0/7", false}, // spans public 11.0.0.0/8 — not wholly private
 		{"172.16.5.0/24", true},
-		{"172.32.0.0/16", false}, // outside 172.16/12
+		{"172.32.0.0/16", false},
 		{"192.168.1.0/24", true},
-		{"203.0.113.0/24", false}, // public
+		{"203.0.113.0/24", false},
 		{"8.8.8.8", false},
+		{"10.0.0.250-11.0.0.5", false}, // range crossing out of 10/8
+		{"10.0.0.10-10.0.0.50", true},
 		{"fc00::/7", true},
-		{"fd12:3456::/32", true},
 		{"2001:db8::/32", false},
 	}
 	for _, c := range cases {
-		if got := IsPrivate(ParseCIDROrIP(c.in)); got != c.want {
-			t.Errorf("IsPrivate(%s)=%v want %v", c.in, got, c.want)
+		if got := mustIv(t, c.in).Private(); got != c.want {
+			t.Errorf("Private(%s)=%v want %v", c.in, got, c.want)
 		}
 	}
 }
