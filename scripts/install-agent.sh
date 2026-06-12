@@ -46,6 +46,16 @@
 #                          removes the manual allowlist-edit step.
 #   --rate-limit-pps=N     Discovery scan rate limit (default 500).
 #                          Written into the rendered allowlist.
+#   --proxy=URL            Egress HTTPS proxy (e.g. http://proxy.corp:3128).
+#                          Used for the install fetch and persisted so the
+#                          agent honors it (HTTPS_PROXY). No credentials in
+#                          the command — authenticated proxies use the host's
+#                          existing proxy env or a host-side credentials file.
+#   --no-proxy=LIST        Comma-separated hosts/domains to bypass the proxy
+#                          (NO_PROXY).
+#   --ca-cert=FILE         Path to a PEM CA bundle to trust for outbound TLS
+#                          (TLS-inspecting proxies). Path only — the file must
+#                          already exist on the host; it is never inlined.
 #   --docker-network=NAME  Attach container to this Docker network.
 #                          Repeatable. First one is passed to `docker run`;
 #                          subsequent ones via `docker network connect`.
@@ -91,6 +101,9 @@ BUNDLE_DIR="/var/lib/silkstrand/bundles"
 ALLOWLIST_FILE="/etc/silkstrand/scan-allowlist.yaml"
 ALLOW_CIDRS=""
 RATE_LIMIT_PPS="500"
+PROXY=""
+NO_PROXY_LIST=""
+CA_CERT=""
 DOCKER_NETWORKS=""
 DOCKER_SCAN_ALL_BRIDGES=0
 DOCKER_HOST_NETWORK=0
@@ -119,6 +132,9 @@ parse_args() {
             --upgrade)       UPGRADE=1 ;;
             --allow-cidr=*)  ALLOW_CIDRS="$ALLOW_CIDRS ${1#*=}" ;;
             --rate-limit-pps=*) RATE_LIMIT_PPS="${1#*=}" ;;
+            --proxy=*)       PROXY="${1#*=}" ;;
+            --no-proxy=*)    NO_PROXY_LIST="${1#*=}" ;;
+            --ca-cert=*)     CA_CERT="${1#*=}" ;;
             --docker-network=*) DOCKER_NETWORKS="$DOCKER_NETWORKS ${1#*=}" ;;
             --docker-scan-all-bridges) DOCKER_SCAN_ALL_BRIDGES=1 ;;
             --docker-host-network) DOCKER_HOST_NETWORK=1 ;;
@@ -134,6 +150,9 @@ parse_args() {
         binary|docker) ;;
         *) fail "--mode must be 'binary' or 'docker' (got '$MODE')" ;;
     esac
+    if [ -n "$CA_CERT" ] && [ ! -r "$CA_CERT" ]; then
+        fail "--ca-cert file not found or unreadable: $CA_CERT (provide a path that exists on this host)"
+    fi
 }
 
 detect_os() {
@@ -161,6 +180,17 @@ need_root() {
     fi
 }
 
+# run_curl wraps curl so every network fetch honors --proxy / --no-proxy /
+# --ca-cert when given. Args are prepended via `set --` so paths/URLs keep their
+# quoting (POSIX-safe). Proxy credentials are never added here — the host's
+# proxy env or a host-side netrc handles auth.
+run_curl() {
+    [ -n "$CA_CERT" ] && set -- --cacert "$CA_CERT" "$@"
+    [ -n "$NO_PROXY_LIST" ] && set -- --noproxy "$NO_PROXY_LIST" "$@"
+    [ -n "$PROXY" ] && set -- --proxy "$PROXY" "$@"
+    curl "$@"
+}
+
 download_binary() {
     suffix="$(detect_os)-$(detect_arch)"
     bin_url="${RELEASE_URL}/${VERSION}/silkstrand-agent-${suffix}"
@@ -169,8 +199,8 @@ download_binary() {
     trap 'rm -rf "$tmp"' EXIT
 
     log "Downloading silkstrand-agent (${suffix}, ${VERSION})"
-    curl -fsSL -o "$tmp/silkstrand-agent" "$bin_url"
-    curl -fsSL -o "$tmp/silkstrand-agent.sha256" "$sha_url"
+    run_curl -fsSL -o "$tmp/silkstrand-agent" "$bin_url"
+    run_curl -fsSL -o "$tmp/silkstrand-agent.sha256" "$sha_url"
 
     log "Verifying checksum"
     expected=$(cut -d' ' -f1 "$tmp/silkstrand-agent.sha256")
@@ -204,7 +234,7 @@ bootstrap_agent_api() {
     payload=$(printf '{"install_token":"%s","name":"%s","version":"%s"}' "$TOKEN" "$NAME" "$agent_version")
 
     resp_file=$(mktemp)
-    http_code=$(curl -sS -o "$resp_file" -w '%{http_code}' -X POST \
+    http_code=$(run_curl -sS -o "$resp_file" -w '%{http_code}' -X POST \
         -H 'Content-Type: application/json' \
         -d "$payload" \
         "${API_URL}/api/v1/agents/bootstrap" 2>/dev/null || echo "000")
@@ -245,6 +275,12 @@ SILKSTRAND_AGENT_KEY=$API_KEY
 SILKSTRAND_API_URL=$WS_URL
 SILKSTRAND_BUNDLE_DIR=$BUNDLE_DIR
 EOF
+    # ADR 013 D3: persist egress proxy + custom CA so the running agent honors
+    # the same network policy as the install fetch. Paths/URLs only — no
+    # proxy credentials are ever written here.
+    [ -n "$PROXY" ]         && printf 'HTTPS_PROXY=%s\n' "$PROXY"        >> "$CONFIG_FILE"
+    [ -n "$NO_PROXY_LIST" ] && printf 'NO_PROXY=%s\n'    "$NO_PROXY_LIST" >> "$CONFIG_FILE"
+    [ -n "$CA_CERT" ]       && printf 'SILKSTRAND_CA_CERT_PATH=%s\n' "$CA_CERT" >> "$CONFIG_FILE"
     chmod 0600 "$CONFIG_FILE"
     log "Credentials written to $CONFIG_FILE"
     log "Agent ID: $AGENT_ID"

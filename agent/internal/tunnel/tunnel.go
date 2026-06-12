@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 const (
@@ -103,7 +104,7 @@ func (t *Tunnel) connect(ctx context.Context, version string, startedAt time.Tim
 
 	slog.Info("connecting to server", "url", url)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url, header)
+	conn, _, err := nettls.WSDialer().DialContext(ctx, url, header)
 	if err != nil {
 		return fmt.Errorf("dialing server: %w", err)
 	}

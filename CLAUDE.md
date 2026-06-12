@@ -601,6 +601,7 @@ curl -s localhost:8080/api/v1/scans/<scan_id> -H "Authorization: Bearer $TOKEN" 
 | `SILKSTRAND_NAABU_SCAN_TYPE` | (none) | Override naabu scan type (e.g. `c` for connect-scan in unprivileged containers) |
 | `SILKSTRAND_SCAN_ALLOWLIST_PATH` | `/etc/silkstrand/scan-allowlist.yaml` | Path to customer scan allowlist file |
 | `SILKSTRAND_RUNTIMES_DIR` | (none) | Local directory for recon tool binaries (airgapped/test; skips remote download). NOTE: default download still pulls recon runtimes from `storage.googleapis.com` — not yet migrated off GCS. |
+| `SILKSTRAND_CA_CERT_PATH` | (none) | PEM CA bundle (path only) appended to the system trust store for all outbound TLS — for TLS-inspecting corporate proxies (ADR 013 D3). Egress proxy is taken from standard `HTTPS_PROXY`/`NO_PROXY`. All agent HTTPS/WSS paths share one transport (`internal/nettls`). |
 
 ## GitHub Secrets & Variables
 

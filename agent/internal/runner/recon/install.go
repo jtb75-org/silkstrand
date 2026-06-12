@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 // runtimesBaseURL is the public download URL (downloads.silkstrand.io,
@@ -206,7 +208,7 @@ func extractTarGz(src, dst string) error {
 }
 
 func downloadAndVerify(url, dst, expectedSHA string) error {
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := nettls.Client(10 * time.Minute)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)

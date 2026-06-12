@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 // ErrNotCached indicates the requested bundle is not in the local cache.
@@ -205,7 +207,7 @@ func (c *Cache) GetOrFetch(bundleName, version, url string) (string, error) {
 
 	slog.Info("fetching bundle", "name", bundleName, "version", version, "url", url)
 
-	client := &http.Client{Timeout: 2 * time.Minute}
+	client := nettls.Client(2 * time.Minute)
 
 	// Read the advertised checksum first; refuse to download without one.
 	shaResp, err := client.Get(url + ".sha256")

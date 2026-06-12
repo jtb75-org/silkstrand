@@ -21,6 +21,12 @@ type Config struct {
 	InstallToken string // env: SILKSTRAND_INSTALL_TOKEN
 	Name         string // env: SILKSTRAND_AGENT_NAME (optional; default = hostname)
 	CredsPath    string // env: SILKSTRAND_CREDS_PATH, default "/var/lib/silkstrand/agent.creds"
+
+	// CACertPath is an optional PEM file (path only, never inlined) appended to
+	// the system trust store for outbound TLS — for TLS-inspecting corporate
+	// proxies that re-sign with a private root CA (ADR 013 D3). Egress proxy is
+	// taken from the standard HTTPS_PROXY/NO_PROXY env, not a config field.
+	CACertPath string // env: SILKSTRAND_CA_CERT_PATH
 }
 
 // Load reads configuration from environment variables and validates required fields.
@@ -37,6 +43,7 @@ func Load() (*Config, error) {
 		InstallToken:  os.Getenv("SILKSTRAND_INSTALL_TOKEN"),
 		Name:          os.Getenv("SILKSTRAND_AGENT_NAME"),
 		CredsPath:     envOrDefault("SILKSTRAND_CREDS_PATH", "/var/lib/silkstrand/agent.creds"),
+		CACertPath:    os.Getenv("SILKSTRAND_CA_CERT_PATH"),
 	}
 
 	// ID and KEY must either both be set (pre-bootstrapped) or both empty
