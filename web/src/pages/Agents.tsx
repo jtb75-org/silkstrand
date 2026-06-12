@@ -52,6 +52,15 @@ export default function Agents() {
   const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
   const [consoleFor, setConsoleFor] = useState<Agent | null>(null);
 
+  // Allowed targets seed the agent's scan-allowlist via --allow-cidr (ADR 013
+  // D2). The host file stays the source of truth; this just saves the initial
+  // SSH-and-edit step. Each entry → one --allow-cidr flag in the command.
+  const [allowCidrs, setAllowCidrs] = useState<string[]>(['']);
+  const addAllow = () => setAllowCidrs((a) => [...a, '']);
+  const updateAllow = (i: number, v: string) =>
+    setAllowCidrs((a) => a.map((x, j) => (j === i ? v : x)));
+  const removeAllow = (i: number) => setAllowCidrs((a) => a.filter((_, j) => j !== i));
+
   const tokenMutation = useMutation({
     mutationFn: createInstallToken,
     onSuccess: (res) => setInstallToken({ token: res.install_token, expiresAt: res.expires_at }),
@@ -84,12 +93,15 @@ export default function Agents() {
     },
   });
 
+  const cleanAllow = allowCidrs.map((c) => c.trim()).filter(Boolean);
   const oneLiner = installToken && apiURL && installScriptURL
-    ? `curl -sSL ${installScriptURL} | sudo sh -s -- \\
-  --token=${installToken.token} \\
-  --api-url=${apiURL} \\
-  --name=$(hostname) \\
-  --as-service`
+    ? `curl -sSL ${installScriptURL} | sudo sh -s -- \\\n  ${[
+        `--token=${installToken.token}`,
+        `--api-url=${apiURL}`,
+        `--name=$(hostname)`,
+        ...cleanAllow.map((c) => `--allow-cidr=${c}`),
+        `--as-service`,
+      ].join(' \\\n  ')}`
     : '';
 
   return (
@@ -105,6 +117,49 @@ export default function Agents() {
           the command on the host that should run the agent. The agent
           registers itself automatically.
         </p>
+
+        <div style={{ margin: '12px 0 16px' }}>
+          <label style={{ fontWeight: 600, fontSize: 14 }}>
+            Allowed targets{' '}
+            <span className="muted" style={{ fontWeight: 400 }}>
+              (the agent only ever scans these)
+            </span>
+          </label>
+          {allowCidrs.map((c, i) => (
+            <div
+              key={i}
+              style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center' }}
+            >
+              <input
+                type="text"
+                placeholder="192.168.0.0/24 · 10.0.0.5 · 10.0.0.10-10.0.0.50 · host.example.com"
+                value={c}
+                onChange={(e) => updateAllow(i, e.target.value)}
+                style={{ flex: '1 1 auto', minWidth: 0 }}
+              />
+              {allowCidrs.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => removeAllow(i)}
+                  aria-label="Remove target"
+                  style={{ flex: '0 0 auto' }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          <button type="button" className="btn btn-sm" onClick={addAllow} style={{ marginTop: 8 }}>
+            + Add target
+          </button>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Seeds the agent's scan allowlist (CIDR, IP, range, or hostname). You can
+            edit it later on the host or via the <strong>Allowlist</strong> button below.
+            Leave empty to configure it on the host instead.
+          </p>
+        </div>
+
         <button
           className="btn btn-primary"
           disabled={tokenMutation.isPending || !apiURL || !installScriptURL}
