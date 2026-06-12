@@ -11,7 +11,7 @@
 #                      Docker VM).
 #
 # One-shot flow (binary):
-#   curl -sSL https://storage.googleapis.com/silkstrand-agent-releases/install.sh | \
+#   curl -sSL https://downloads.silkstrand.io/agent/install.sh | \
 #     sudo sh -s -- \
 #       --token=sst_<install-token> \
 #       --api-url=https://<your DC API host> \
@@ -20,7 +20,7 @@
 #       --allow-cidr=192.168.0.0/24
 #
 # One-shot flow (docker):
-#   curl -sSL https://storage.googleapis.com/silkstrand-agent-releases/install.sh | \
+#   curl -sSL https://downloads.silkstrand.io/agent/install.sh | \
 #     sudo sh -s -- \
 #       --mode=docker \
 #       --token=sst_<install-token> \
@@ -77,7 +77,7 @@ set -eu
 MODE="binary"
 INSTALL_DIR="/usr/local/bin"
 VERSION="latest"
-RELEASE_URL="https://storage.googleapis.com/silkstrand-agent-releases"
+RELEASE_URL="https://downloads.silkstrand.io/agent"
 IMAGE_REGISTRY="us-central1-docker.pkg.dev/silkstrand-prod/silkstrand"
 TOKEN=""
 API_URL=""
