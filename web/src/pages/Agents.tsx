@@ -14,7 +14,6 @@ export default function Agents() {
   const qc = useQueryClient();
   const { active } = useAuth();
   const apiURL = active?.dc_api_url || '';
-  const installScriptURL = 'https://storage.googleapis.com/silkstrand-agent-releases/install.sh';
 
   const { data: agents, isLoading, error } = useQuery<Agent[]>({
     queryKey: ['agents'],
@@ -80,7 +79,11 @@ export default function Agents() {
     },
   });
 
-  const oneLiner = installToken && apiURL
+  // Install-script URL comes from the DC's downloads endpoint (single source of
+  // truth, driven by the server's AGENT_RELEASES_URL) — never hardcode it, or
+  // it drifts from where releases are actually published.
+  const installScriptURL = downloads?.install_script ?? '';
+  const oneLiner = installToken && apiURL && installScriptURL
     ? `curl -sSL ${installScriptURL} | sudo sh -s -- \\
   --token=${installToken.token} \\
   --api-url=${apiURL} \\
