@@ -224,6 +224,9 @@ const (
 	ResourceTypeHost          = "host"
 	ResourceTypeContainer     = "container"
 	ResourceTypeCloudResource = "cloud_resource"
+	// ResourceTypeHTTPService is a virtual host / website, identity-keyed on its
+	// name so vhosts sharing an ingress IP stay distinct (ADR 014 D1).
+	ResourceTypeHTTPService = "http_service"
 
 	AssetSourceManual     = "manual"
 	AssetSourceDiscovered = "discovered"

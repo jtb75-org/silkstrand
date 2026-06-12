@@ -1379,17 +1379,37 @@ func (s *PostgresStore) UpsertAsset(ctx context.Context, in UpsertAssetInput) (*
 		h := in.Hostname
 		hostname = &h
 	}
-	// Postgres partial unique index (tenant_id, primary_ip) WHERE primary_ip IS NOT NULL
-	// handles the upsert shape for real hosts. For IP-less assets we always insert.
-	var a model.Asset
-	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO assets (tenant_id, primary_ip, hostname, fingerprint, resource_type, source, environment)
-		 VALUES ($1, $2::inet, $3, $4, $5, $6, $7)
-		 ON CONFLICT (tenant_id, primary_ip) WHERE primary_ip IS NOT NULL DO UPDATE SET
+	const returning = ` RETURNING id, tenant_id, host(primary_ip), hostname, fingerprint, resource_type, source, environment, first_seen, last_seen, created_at`
+	const insert = `INSERT INTO assets (tenant_id, primary_ip, hostname, fingerprint, resource_type, source, environment)
+		 VALUES ($1, $2::inet, $3, $4, $5, $6, $7)`
+
+	// Two identity axes (ADR 014 D1):
+	//   - http_service is keyed on the NAME — vhosts sharing an ingress IP are
+	//     distinct, so conflict on (tenant_id, lower(hostname)) and treat the
+	//     resolved primary_ip as an updatable attribute.
+	//   - everything else keeps the (tenant_id, primary_ip) host identity; the
+	//     index excludes http_service, so its predicate is mirrored here. IP-less
+	//     non-http_service assets don't match the partial index and always insert.
+	var query string
+	if in.ResourceType == model.ResourceTypeHTTPService {
+		if hostname == nil {
+			return nil, fmt.Errorf("http_service asset requires a hostname")
+		}
+		query = insert + `
+		 ON CONFLICT (tenant_id, lower(hostname)) WHERE resource_type = 'http_service' AND hostname IS NOT NULL DO UPDATE SET
+		   primary_ip = COALESCE(EXCLUDED.primary_ip, assets.primary_ip),
+		   fingerprint = assets.fingerprint || EXCLUDED.fingerprint,
+		   last_seen = NOW()` + returning
+	} else {
+		query = insert + `
+		 ON CONFLICT (tenant_id, primary_ip) WHERE primary_ip IS NOT NULL AND resource_type <> 'http_service' DO UPDATE SET
 		   hostname = COALESCE(EXCLUDED.hostname, assets.hostname),
 		   fingerprint = assets.fingerprint || EXCLUDED.fingerprint,
-		   last_seen = NOW()
-		 RETURNING id, tenant_id, host(primary_ip), hostname, fingerprint, resource_type, source, environment, first_seen, last_seen, created_at`,
+		   last_seen = NOW()` + returning
+	}
+
+	var a model.Asset
+	err := s.db.QueryRowContext(ctx, query,
 		in.TenantID, primaryIP, hostname, fp, in.ResourceType, in.Source, in.Environment).
 		Scan(&a.ID, &a.TenantID, &a.PrimaryIP, &a.Hostname, &a.Fingerprint, &a.ResourceType,
 			&a.Source, &a.Environment, &a.FirstSeen, &a.LastSeen, &a.CreatedAt)
