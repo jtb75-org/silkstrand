@@ -652,13 +652,29 @@ func maybeAutoDiscover(ctx context.Context, s store.Store, sched scheduler.Dispa
 		slog.Error("auto-discover: agent lookup", "agent_id", agentID, "error", err)
 		return
 	}
-	created, err := s.CreateScanDefinition(ctx, model.ScanDefinition{
-		TenantID:  agent.TenantID,
-		Name:      "Auto-discovery",
+	// A recurring def needs next_run_at seeded, or the scheduler (which claims
+	// schedule IS NOT NULL AND next_run_at IS NOT NULL) runs it once and never
+	// recurs — same initialization the scan-definition handler does.
+	var nextRun *time.Time
+	if cron != nil {
+		if c, perr := scheduler.ParseCron(*cron); perr == nil {
+			if n, nerr := c.Next(time.Now().UTC()); nerr == nil {
+				nextRun = &n
+			}
+		}
+	}
+	// CreateScanDefinition keys tenant off the ctx, but the WSS message ctx has
+	// none — scope it to the agent's tenant. Name is per-agent because
+	// scan_definitions is UNIQUE(tenant_id, name) (agents are not name-unique,
+	// so a duplicate-named agent is the one rare collision; it fails loudly).
+	cctx := store.WithTenantID(ctx, agent.TenantID)
+	created, err := s.CreateScanDefinition(cctx, model.ScanDefinition{
+		Name:      fmt.Sprintf("Auto-discovery (%s)", agent.Name),
 		Kind:      model.ScanDefinitionKindDiscovery,
 		ScopeKind: model.ScanDefinitionScopeAgentAllowlist,
 		AgentID:   &agentID,
 		Schedule:  cron, // nil = on-connect only; set = recurring (D5)
+		NextRunAt: nextRun,
 		Enabled:   true,
 	})
 	if err != nil {
