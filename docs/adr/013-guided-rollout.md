@@ -90,20 +90,37 @@ Invariants preserved:
 
 This eliminates touchpoint #3 (the off-product SSH edit) entirely.
 
-### D3. Proxy fields (advanced)
+### D3. Proxy + custom CA (advanced)
 
-Segmented/enterprise networks reach `api.silkstrand.io` through an egress proxy.
-Today **neither `install-agent.sh` nor the agent supports a proxy** — this is
-net-new capability, in two parts:
+Segmented/enterprise networks reach `api.silkstrand.io` through an egress proxy,
+and **TLS-inspecting** proxies re-sign the connection with a corporate root CA —
+the *real* enterprise blocker. Today **neither `install-agent.sh` nor the agent
+supports a proxy or a custom CA.** Net-new capability, shipped as its **own**
+feature (PR 5) so it does not gate D2/D5:
 
-- `install-agent.sh --proxy=URL [--no-proxy=LIST]` → passed to `curl` for the
-  install fetch **and** persisted into `agent.env`.
-- The agent honors `HTTPS_PROXY` / `NO_PROXY` for its WSS dial *and* runtime
-  tool/template downloads (Go's `net/http` + websocket dialer can use proxy env,
-  but it must be wired and tested).
+**Proxy.** `install-agent.sh --proxy=URL [--no-proxy=LIST]` → passed to `curl`
+for the install fetch **and** persisted into `agent.env`; the agent honors
+`HTTPS_PROXY`/`NO_PROXY` via `http.ProxyFromEnvironment`. **No proxy credentials
+in the generated command** (it lands in shell history + the UI); authenticated
+proxies use the host's existing proxy env or a host-side credentials file.
 
-The panel exposes a "Proxy (advanced)" field that appends `--proxy=`, but the
-underlying support ships as its **own** small feature so it does not gate D2/D5.
+**Custom CA.** `--ca-cert=FILE` / `SILKSTRAND_CA_CERT_PATH` (path only, never
+inlined). The primary path is the **host OS trust store** (the customer adds the
+corporate CA via `update-ca-certificates`; Go's system pool then works for
+free). The escape hatch, for hosts that can't modify the store: the agent loads
+`x509.SystemCertPool()`, **appends** the PEM(s), and uses that as `RootCAs` —
+note `SSL_CERT_FILE` *replaces* rather than augments the pool, so it is not a
+clean answer. Fail loudly if no certs append; never `InsecureSkipVerify`; log
+the CA path/fingerprint, never the contents.
+
+**Centralize the agent's TLS (implementation requirement).** The agent today
+builds plain `http.Client`s in ~6 places (bootstrap, cache, `runner/recon/install`,
+`runner/collector`, updater, uninstall) and dials WSS via
+`websocket.DefaultDialer`. PR 5 adds **one internal transport helper** returning
+an `*http.Client`/`*http.Transport` (`RootCAs` set when configured +
+`ProxyFromEnvironment`) and a `websocket.Dialer` with the same `TLSClientConfig`/
+proxy — used by WSS, bootstrap, every download path, the updater, and
+self-delete, so they all trust the same CA and honor the same proxy.
 
 ### D4. `agent_allowlist` scan scope
 
@@ -120,19 +137,39 @@ adjusts scope with no UI round-trip. This removes the redundant `scope=cidr`
 re-entry (the "scope specified twice" problem) and gives a durable standing
 definition: "discover everything I'm allowed to, on a cadence."
 
+Dispatch behavior (fail-safe):
+
+- Requires `agent_id`; no `cidr`/`collection_id`/`asset_endpoint_id`.
+- On dispatch, load the agent's latest snapshot. If it is **missing, empty, or
+  unparsable, do not silently dispatch a broad scan** — mark the run
+  blocked/failed with an actionable message ("agent hasn't reported an allowlist
+  yet").
+- Dispatch each `allow` entry **as-is** (CIDR/IP/range/hostname). Do **not**
+  subtract `deny` server-side in v1 — the agent enforces `deny` locally.
+- Stamp the snapshot hash + `reported_at` on the run for transparency. A
+  staleness *warning* (snapshot older than the live connection) is allowed; do
+  not block solely on staleness.
+
 The agent re-vets every target against its local allowlist before scanning
 (ADR 003 D11), so `agent_allowlist` scope can never exceed the host file even if
-the snapshot is stale.
+the snapshot is stale — the worst case is a directive the agent narrows or
+rejects, never a policy bypass.
 
 ### D5. Auto-discover on connect
 
 The install panel gains a checkbox **"Run discovery as soon as it connects"**
-(with an optional "then weekly"). Because the install token is minted *before*
-the agent exists, this is **not** a curl flag — it is server-side intent on the
-token:
+with a recurring selector **(Off / Daily / Weekly, default Off)**. Discovery
+**on connect runs always** (that is what the checkbox promises); a *recurring*
+schedule is opt-in, because silently installing a standing scan of someone's
+network on a cadence they did not choose is a trust/cost surprise. Because the
+install token is minted *before* the agent exists, this is **not** a curl flag —
+it is server-side intent on the token:
 
-- `install_tokens` gains `auto_discover BOOLEAN` (+ optional `discover_cron`).
-- On bootstrap + first allowlist snapshot, the server creates a discovery
+- `install_tokens` gains `auto_discover BOOLEAN` (+ `discover_cron TEXT NULL`
+  for the Daily/Weekly choice).
+- On bootstrap **and the agent's first allowlist snapshot** (not merely on WSS
+  connect — the agent reports a snapshot immediately on startup, so waiting for
+  it avoids racing a missing snapshot, per D4), the server creates a discovery
   `scan_definition` with `scope_kind = agent_allowlist` (D4) for the new agent
   and executes it once (and installs the cron if requested).
 
@@ -173,14 +210,26 @@ never scans its allowlist is a false alarm), and **(b)** existing
 skipped (they target endpoints, not ranges). Intra-input redundancy
 (a typed `/24` inside a typed `/16`) is also reported.
 
+**Zone-aware suppression (D10).** The zone tag disambiguates RFC1918 reuse, but
+conservatively:
+
+- Suppress a warning **only** when *both* sides have non-empty, normalized zones
+  **and** they differ **and** the overlapping range is **private** address space
+  (`10/8`, `172.16/12`, `192.168/16`, IPv6 ULA `fc00::/7`).
+- **Public** CIDR overlap **always warns**, even across zones — public reuse is
+  far more likely a real duplicate or misconfiguration than legitimate reuse.
+- If **either** zone is unset, **warn** (unset stays conservative).
+- This is **warning/UI logic, not an authorization boundary** (D9). A mislabeled
+  zone that hides a real private-space duplicate is an accepted *operator
+  labeling* risk, never a security control.
+
 The server already parses CIDRs into `net.IPNet` (`api/internal/allowlist`); only
-the interval-intersection math is new (~tens of lines). The modal frames the
-ambiguity rather than deciding for the operator:
+the interval-intersection + private/public classification is new (~tens of
+lines). The modal frames the ambiguity rather than deciding for the operator:
 
 > ⚠️ `10.0.0.0/24` overlaps with agent **dc-west** (allowlist `10.0.0.0/16`,
-> auto-discovery on). If both agents are on the **same network**, you'll scan
-> these hosts twice. If they're **separate sites/segments** (common with private
-> ranges), this is fine. — [Adjust ranges] [Proceed anyway]
+> auto-discovery on, zone `office-east`). If these agents see the **same
+> network**, you'll scan these hosts twice. — [Adjust ranges] [Proceed anyway]
 
 The same endpoint is reused on manual scan_definition creation.
 
@@ -189,17 +238,22 @@ The same endpoint is reused on manual scan_definition creation.
 ```
 Install a new agent
   Name             [ acme-scanner        ]   (defaults to hostname)
+  Zone / site      [ office-east         ]   (optional; disambiguates reused private ranges — D10)
   Allowed targets  [ 192.168.0.0/24   ] [+]  → --allow-cidr=…
                    [ 10.0.0.0/24      ] [x]
                    "The agent only ever scans these. Edit later on the host or here."
   ☑ Run discovery as soon as it connects        → auto_discover on the token
-       └ ☐ then weekly                           → discover_cron
-  ▸ Advanced   (HTTPS proxy · rate limit · run as service · docker mode)
+       └ Recurring: ( • Off ) ( Daily ) ( Weekly ) → discover_cron
+  ▸ Advanced   (HTTPS proxy · custom CA · rate limit · run as service · docker mode)
   [ Generate install command ]
-       → overlap-preview (D6) → [confirm modal if conflicts] →
-         mint token (auto_discover) + render:
+       → overlap-preview (D6, zone-aware) → [confirm modal if conflicts] →
+         mint token (zone, auto_discover, discover_cron) + render:
          curl … --allow-cidr=192.168.0.0/24 --allow-cidr=10.0.0.0/24 --as-service
 ```
+
+Zone, auto-discover, and the cron are **server-side token metadata** — they do
+not appear as curl flags (the agent learns its zone from the server at bootstrap;
+it does not need it locally).
 
 ### D8. Power-user surfaces stay
 
@@ -214,6 +268,24 @@ The host `scan-allowlist.yaml` remains the ultimate authority (ADR 003 D11). The
 panel only *seeds* it; the agent re-vets every target locally before scanning,
 including for `agent_allowlist` scope (D4). Validation tiering (ADR 012) is
 out of scope here and continues to layer on top.
+
+### D10. Agent zones
+
+A zone/site label disambiguates reused private address space for the overlap
+check (D6) — `192.168.1.0/24` in `office-east` vs `office-west` are different
+machines. It is **server-side deployment metadata**, not agent-side config:
+
+- `install_tokens.zone TEXT NULL` and `agents.zone TEXT NULL`.
+- `CreateInstallToken` accepts an optional zone; **normalized** to a slug
+  (trim, lowercase, bounded length, rejected if empty-after-trim). Keep the
+  original label only if presentation needs it.
+- Token consumption returns the token record (not just `tenant_id`) so
+  `bootstrap` copies `zone` onto the new agent.
+- Surface `zone` in `ListAgents`/`GetAgent` so the UI can show and filter it.
+
+The agent does not need to know its zone (it may appear in local logs if useful,
+but it is not required for any agent-side decision). Zone is **labeling for the
+overlap heuristic only**, never an authorization input (D6, D9).
 
 ## Consequences
 
@@ -234,7 +306,10 @@ out of scope here and continues to layer on top.
 - The overlap check is a heuristic; it will both miss real duplicates (different
   agents, genuinely same wire, ranges that don't textually overlap) and warn on
   false ones (reused private space). It is decision support, not a guarantee.
-- Proxy support is net-new agent capability with its own test surface.
+- Proxy + custom-CA support is net-new agent capability with its own test
+  surface (and motivates centralizing the agent's TLS/transport, D3).
+- The zone tag is operator-labeled; a wrong label can hide a real private-space
+  duplicate warning — accepted as a labeling risk, not a security control (D6).
 
 **Scope boundary:**
 
@@ -246,35 +321,44 @@ out of scope here and continues to layer on top.
 ## Implementation (PR split)
 
 1. **PR 1 — Allowed-targets field** (D2): frontend only; repeatable input →
-   `--allow-cidr`; require ≥1 entry to enable auto-discover. Ships immediately.
-2. **PR 2 — `agent_allowlist` scope** (D4): model constant, scheduler dispatch
-   resolves the agent's current snapshot to targets, agent re-vet unchanged.
-3. **PR 3 — Auto-discover on connect** (D5): `install_tokens.auto_discover`
-   (+ `discover_cron`); create-on-first-snapshot hook; panel checkbox.
-4. **PR 4 — Overlap preview + modal** (D6): `allowlist-preview` endpoint +
-   interval-intersection util; confirmation modal; reuse on definition create.
-5. **PR 5 — Proxy support** (D3): `install-agent.sh --proxy/--no-proxy`; agent
-   honors `HTTPS_PROXY`/`NO_PROXY` for WSS + downloads; panel advanced field.
+   `--allow-cidr` (shell-quoted values). **Shipped** (#353).
+2. **PR 2 — `agent_allowlist` scope** (D4): model constant; scheduler dispatch
+   resolves the agent's current snapshot to targets; fail-safe on
+   missing/empty/unparsable snapshot; stamp snapshot hash/`reported_at`; agent
+   re-vet unchanged.
+3. **PR 3 — Auto-discover on connect** (D5): `install_tokens.auto_discover` +
+   `discover_cron`; create-on-first-snapshot hook; panel checkbox + Off/Daily/
+   Weekly selector.
+4. **PR 4 — Overlap preview + modal + zones** (D6, D10): `agents.zone` +
+   `install_tokens.zone` + normalization + `ListAgents`/`GetAgent` exposure +
+   panel zone field; `allowlist-preview` endpoint with zone-aware, private-only
+   suppression; confirmation modal; reuse on definition create.
+5. **PR 5 — Proxy + custom CA** (D3): `install-agent.sh --proxy/--no-proxy/
+   --ca-cert`; a centralized agent TLS/transport helper (`RootCAs` +
+   `ProxyFromEnvironment`) used by WSS + every download/bootstrap/updater path;
+   panel advanced fields. Independent of PRs 2–4.
 
-PRs 1–4 are the funnel collapse; PR 5 is independent.
+PRs 2–4 are the funnel collapse; PR 5 is independent.
 
 ## Open questions
 
-- **Q1. Network/site/zone tagging.** The precise fix for RFC1918 reuse (D6) is a
-  zone tag on agents: same-zone overlap → strong warning; different-zone →
-  suppressed. Small data-model addition, large precision win. Defer to a
-  follow-on, but design D6's response shape to carry a future `zone` field.
-- **Q2. Dispatch-time coalescing.** A more robust layer than the config-time
-  modal: the scheduler notices two due discovery scans cover overlapping *live
-  assets* (which already dedupe by IP) and skips/merges. Catches overlaps that
-  arise after install. More complex; a v2.
-- **Q3. One token, many hosts.** An install command pasted on N hosts mints N
-  agents from one token today only if the token is multi-use. Should
-  `auto_discover` + a multi-use token fan out N discovery scans (one per agent's
-  own allowlist)? Likely yes, but confirm the token model first.
-- **Q4. Proxy auth.** `--proxy=http://user:pass@host` puts credentials in argv
-  and `agent.env`. Prefer a separate `--proxy-credentials-file` or env-only
-  injection; resolve in PR 5.
-- **Q5. Default discover cadence.** Is "once on connect, then weekly" the right
-  default, or should the standing cron be opt-in only? Proposing on-connect
-  always; weekly opt-in.
+- **Q2 (deferred to v2). Dispatch-time coalescing.** A more robust layer than
+  the config-time modal: the scheduler notices two due discovery scans cover
+  overlapping *live assets* (which already dedupe by IP) and skips/merges.
+  Catches overlaps that arise after install, on real assets rather than paper
+  CIDRs. More complex; explicitly out of this iteration.
+- **Multi-use / fleet tokens.** Tokens stay single-use (one token → one agent →
+  one auto-discovery) for this iteration (resolved). "Paste once, deploy to N
+  hosts" is a separate fleet-rollout capability with its own design — when built,
+  `auto_discover` should fan out one discovery per agent's own allowlist.
+
+### Resolved (folded into decisions)
+
+- **Q1 → D10.** Add the zone tag **now** (not deferred); used by D6 with
+  **private-only** cross-zone suppression and conservative unset behavior.
+- **Q3 → single-use tokens** (above), one agent per token.
+- **Q4 → no proxy auth in the generated command** (D3); custom-CA support added
+  for TLS-inspecting proxies (host trust store primary, `--ca-cert` append-to-
+  pool escape hatch).
+- **Q5 → on-connect always; recurring opt-in Off/Daily/Weekly, default Off**
+  (D5).
