@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 // Apply downloads the binary for this host's OS+arch, verifies the
@@ -41,7 +43,7 @@ func Apply(baseURL, version, expectedSHA256 string) error {
 	url := fmt.Sprintf("%s/%s/silkstrand-agent-%s", baseURL, version, suffix)
 
 	// Download
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := nettls.Client(120 * time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)

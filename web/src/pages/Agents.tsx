@@ -73,6 +73,12 @@ export default function Agents() {
   // ranges for the overlap heuristic. Server-side metadata — not a curl flag.
   const [zone, setZone] = useState('');
 
+  // Advanced connectivity (ADR 013 D3): egress proxy + custom CA for locked-down
+  // networks. These append curl/agent flags to the command — not token metadata.
+  const [proxy, setProxy] = useState('');
+  const [noProxy, setNoProxy] = useState('');
+  const [caCert, setCaCert] = useState('');
+
   // Auto-discover on connect (ADR 013 D5). Recurring is opt-in, default Off.
   const [autoDiscover, setAutoDiscover] = useState(true);
   const [discoverSchedule, setDiscoverSchedule] = useState<'off' | 'daily' | 'weekly'>('off');
@@ -148,6 +154,9 @@ export default function Agents() {
         `--api-url=${apiURL}`,
         `--name=$(hostname)`,
         ...cleanAllow.map((c) => `--allow-cidr=${shQuote(c)}`),
+        ...(proxy.trim() ? [`--proxy=${shQuote(proxy.trim())}`] : []),
+        ...(noProxy.trim() ? [`--no-proxy=${shQuote(noProxy.trim())}`] : []),
+        ...(caCert.trim() ? [`--ca-cert=${shQuote(caCert.trim())}`] : []),
         `--as-service`,
       ].join(' \\\n  ')}`
     : '';
@@ -256,6 +265,49 @@ export default function Agents() {
             Discovers across the allowed targets once the agent connects — no scan to set up.
           </p>
         </div>
+
+        <details style={{ margin: '12px 0 16px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
+            Advanced — proxy &amp; custom CA
+          </summary>
+          <div style={{ marginTop: 10, display: 'grid', gap: 10, maxWidth: 420 }}>
+            <label style={{ fontSize: 13 }}>
+              HTTPS proxy
+              <input
+                type="text"
+                placeholder="http://proxy.corp:3128"
+                value={proxy}
+                onChange={(e) => setProxy(e.target.value)}
+                style={{ display: 'block', marginTop: 4, width: '100%' }}
+              />
+            </label>
+            <label style={{ fontSize: 13 }}>
+              No-proxy list
+              <input
+                type="text"
+                placeholder="10.0.0.0/8,.internal"
+                value={noProxy}
+                onChange={(e) => setNoProxy(e.target.value)}
+                style={{ display: 'block', marginTop: 4, width: '100%' }}
+              />
+            </label>
+            <label style={{ fontSize: 13 }}>
+              Custom CA cert (path on the host)
+              <input
+                type="text"
+                placeholder="/etc/ssl/certs/corp-root.pem"
+                value={caCert}
+                onChange={(e) => setCaCert(e.target.value)}
+                style={{ display: 'block', marginTop: 4, width: '100%' }}
+              />
+            </label>
+            <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+              For TLS-inspecting proxies. The CA file must already exist on the host —
+              its path is passed, never its contents. No proxy credentials go in the
+              command; authenticated proxies use the host's proxy env.
+            </p>
+          </div>
+        </details>
 
         <button
           className="btn btn-primary"

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jtb75/silkstrand/agent/internal/config"
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 type storedCreds struct {
@@ -70,7 +71,7 @@ func bootstrapViaToken(cfg *config.Config, version string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := nettls.Client(20 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("bootstrap request: %w", err)

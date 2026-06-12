@@ -24,6 +24,7 @@ import (
 	"github.com/jtb75/silkstrand/agent/internal/cache"
 	"github.com/jtb75/silkstrand/agent/internal/config"
 	"github.com/jtb75/silkstrand/agent/internal/logstream"
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 	"github.com/jtb75/silkstrand/agent/internal/prober"
 	"github.com/jtb75/silkstrand/agent/internal/runner"
 	"github.com/jtb75/silkstrand/agent/internal/tunnel"
@@ -60,6 +61,13 @@ func main() {
 	logLevel := config.ParseLogLevel(cfg.LogLevel)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
+
+	// Configure outbound TLS (custom CA) + egress proxy once, before the first
+	// network call (bootstrap below). ADR 013 D3.
+	if err := nettls.Configure(nettls.Options{CACertPath: cfg.CACertPath}); err != nil {
+		slog.Error("configuring outbound TLS", "error", err)
+		os.Exit(1)
+	}
 
 	// If no explicit credentials, try loading from disk or the install-token flow.
 	if err := bootstrap.EnsureCreds(cfg, version); err != nil {
@@ -503,6 +511,13 @@ func runUninstall() error {
 	if err != nil {
 		return err
 	}
+	// This subcommand returns before normal startup, so configure outbound TLS
+	// here too — the self-deregister below must trust the custom CA on a
+	// TLS-inspected network (ADR 013 D3). Best-effort: a bad CA path shouldn't
+	// block uninstall, so log and continue rather than abort.
+	if err := nettls.Configure(nettls.Options{CACertPath: cfg.CACertPath}); err != nil {
+		slog.Warn("configuring outbound TLS for deregister (continuing)", "error", err)
+	}
 	if err := bootstrap.EnsureCreds(cfg, version); err != nil {
 		// No creds to call with — nothing to deregister.
 		slog.Warn("no credentials available; skipping server deregister", "error", err)
@@ -521,7 +536,7 @@ func runUninstall() error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.AgentKey)
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := nettls.Client(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Warn("deregister call failed (continuing)", "error", err)

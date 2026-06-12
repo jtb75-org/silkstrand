@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jtb75/silkstrand/agent/internal/nettls"
 )
 
 // collectorMap maps target engine types to collector binary base names.
@@ -119,7 +121,7 @@ func EnsureCollector(collectorID string) (string, error) {
 // downloadCollector fetches a collector binary + its .sha256 sidecar from
 // MinIO, verifies the hash, and stores it in cacheDir.
 func downloadCollector(url, shaURL, cacheDir, binaryName string) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := nettls.Client(5 * time.Minute)
 
 	// Fetch expected SHA256.
 	shaResp, err := client.Get(shaURL)
