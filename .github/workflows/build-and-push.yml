@@ -47,6 +47,7 @@ jobs:
             backoffice_api=false
             backoffice_web=false
 
+            git config --global --add safe.directory "${GITHUB_WORKSPACE}"
             before="${{ github.event.before }}"
             if [ "${before}" = "0000000000000000000000000000000000000000" ]; then
               git diff-tree --no-commit-id --name-only -r "${{ github.sha }}" > /tmp/changed-files
