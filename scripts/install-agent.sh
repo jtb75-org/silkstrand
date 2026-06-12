@@ -518,10 +518,11 @@ $mapping
 EOF
 }
 
-# Assemble the array of `docker run` args from the current flag state.
-# Writes space-separated tokens to stdout, quoted so `eval` reconstructs
-# them — the shell-portable way to pass a variable-length arg list
-# between functions without array support.
+# Emit the `docker run` args from the current flag state, ONE argument per
+# line. docker_run_built reads them back into positional parameters, so values
+# with spaces (a CA path) or glob characters (NO_PROXY=*.internal) are passed
+# verbatim — never word-split or pathname-expanded by the shell. A flag and its
+# value are two argv entries (`-e` then `FOO=bar`), so each goes on its own line.
 docker_build_run_args() {
     cname=$(docker_container_name)
     image="${IMAGE_REGISTRY}/silkstrand-agent:${VERSION}"
@@ -539,36 +540,50 @@ docker_build_run_args() {
         [ -z "$first_net" ] && first_net="bridge"
     fi
 
-    printf -- '-d '
-    printf -- '--name %s ' "$cname"
-    printf -- '--restart unless-stopped '
-    printf -- '--network %s ' "$first_net"
-    printf -- '-e SILKSTRAND_AGENT_ID=%s ' "$AGENT_ID"
-    printf -- '-e SILKSTRAND_AGENT_KEY=%s ' "$API_KEY"
-    printf -- '-e SILKSTRAND_API_URL=%s ' "$WS_URL"
-    printf -- '-e SILKSTRAND_RUNTIMES_DIR=/home/nonroot/runtimes '
+    printf -- '-d\n'
+    printf -- '--name\n%s\n' "$cname"
+    printf -- '--restart\nunless-stopped\n'
+    printf -- '--network\n%s\n' "$first_net"
+    printf -- '-e\nSILKSTRAND_AGENT_ID=%s\n' "$AGENT_ID"
+    printf -- '-e\nSILKSTRAND_AGENT_KEY=%s\n' "$API_KEY"
+    printf -- '-e\nSILKSTRAND_API_URL=%s\n' "$WS_URL"
+    printf -- '-e\nSILKSTRAND_RUNTIMES_DIR=/home/nonroot/runtimes\n'
     if [ "$DOCKER_CAPS" = "raw" ]; then
         # Raw caps available → override the image's connect-scan default with
         # the faster SYN scan.
-        printf -- '--cap-add=NET_RAW --cap-add=NET_ADMIN '
-        printf -- '-e SILKSTRAND_NAABU_SCAN_TYPE=s '
+        printf -- '--cap-add=NET_RAW\n--cap-add=NET_ADMIN\n'
+        printf -- '-e\nSILKSTRAND_NAABU_SCAN_TYPE=s\n'
     else
-        printf -- '-e SILKSTRAND_NAABU_SCAN_TYPE=c '
+        printf -- '-e\nSILKSTRAND_NAABU_SCAN_TYPE=c\n'
     fi
-    printf -- '-v %s:/home/nonroot ' "$vol"
+    printf -- '-v\n%s:/home/nonroot\n' "$vol"
     if [ -f "$allow_mount" ]; then
-        printf -- '-v %s:/etc/silkstrand/scan-allowlist.yaml:ro ' "$allow_mount"
+        printf -- '-v\n%s:/etc/silkstrand/scan-allowlist.yaml:ro\n' "$allow_mount"
     fi
     # ADR 013 D3: egress proxy + custom CA. Proxy goes in as env; the CA file is
     # bind-mounted from the host (its host path means nothing inside the
     # container) and SILKSTRAND_CA_CERT_PATH points at the in-container path.
-    [ -n "$PROXY" ]         && printf -- '-e HTTPS_PROXY=%s ' "$PROXY"
-    [ -n "$NO_PROXY_LIST" ] && printf -- '-e NO_PROXY=%s ' "$NO_PROXY_LIST"
+    [ -n "$PROXY" ]         && printf -- '-e\nHTTPS_PROXY=%s\n' "$PROXY"
+    [ -n "$NO_PROXY_LIST" ] && printf -- '-e\nNO_PROXY=%s\n' "$NO_PROXY_LIST"
     if [ -n "$CA_CERT" ]; then
-        printf -- '-v %s:%s:ro ' "$CA_CERT" "$DOCKER_CA_DEST"
-        printf -- '-e SILKSTRAND_CA_CERT_PATH=%s ' "$DOCKER_CA_DEST"
+        printf -- '-v\n%s:%s:ro\n' "$CA_CERT" "$DOCKER_CA_DEST"
+        printf -- '-e\nSILKSTRAND_CA_CERT_PATH=%s\n' "$DOCKER_CA_DEST"
     fi
-    printf -- '%s' "$image"
+    printf -- '%s\n' "$image"
+}
+
+# Run `docker run` with the newline-delimited args from docker_build_run_args,
+# read into positional parameters so each is passed verbatim (no word-split, no
+# glob). Args never contain newlines (paths/URLs/values), so line-delimiting is
+# safe; blank lines are skipped defensively.
+docker_run_built() {
+    set --
+    while IFS= read -r _arg; do
+        [ -n "$_arg" ] && set -- "$@" "$_arg"
+    done <<EOF
+$(docker_build_run_args)
+EOF
+    docker run "$@" >/dev/null
 }
 
 docker_attach_extra_networks() {
@@ -632,15 +647,17 @@ EOF
         printf '      SILKSTRAND_NAABU_SCAN_TYPE: c\n'
     fi
     # ADR 013 D3: proxy env + custom CA path (mounted under volumes below).
-    [ -n "$PROXY" ]         && printf '      HTTPS_PROXY: %s\n' "$PROXY"
-    [ -n "$NO_PROXY_LIST" ] && printf '      NO_PROXY: %s\n' "$NO_PROXY_LIST"
-    [ -n "$CA_CERT" ]       && printf '      SILKSTRAND_CA_CERT_PATH: %s\n' "$DOCKER_CA_DEST"
+    # Quoted because NO_PROXY commonly contains '*' (e.g. *.internal), which is
+    # a YAML alias indicator unquoted, and proxy URLs / paths can carry ':'.
+    [ -n "$PROXY" ]         && printf '      HTTPS_PROXY: "%s"\n' "$PROXY"
+    [ -n "$NO_PROXY_LIST" ] && printf '      NO_PROXY: "%s"\n' "$NO_PROXY_LIST"
+    [ -n "$CA_CERT" ]       && printf '      SILKSTRAND_CA_CERT_PATH: "%s"\n' "$DOCKER_CA_DEST"
     printf '    volumes:\n'
     printf '      - %s:/home/nonroot\n' "$vol"
     if [ -f "$allow_mount" ]; then
         printf '      - %s:/etc/silkstrand/scan-allowlist.yaml:ro\n' "$allow_mount"
     fi
-    [ -n "$CA_CERT" ] && printf '      - %s:%s:ro\n' "$CA_CERT" "$DOCKER_CA_DEST"
+    [ -n "$CA_CERT" ] && printf '      - "%s:%s:ro"\n' "$CA_CERT" "$DOCKER_CA_DEST"
     if [ "$DOCKER_CAPS" = "raw" ]; then
         printf '    cap_add:\n      - NET_RAW\n      - NET_ADMIN\n'
     fi
@@ -681,10 +698,8 @@ do_install_docker() {
     log "Pulling image ${IMAGE_REGISTRY}/silkstrand-agent:${VERSION}"
     docker pull "${IMAGE_REGISTRY}/silkstrand-agent:${VERSION}" >/dev/null
 
-    args=$(docker_build_run_args)
     log "Starting container $(docker_container_name)"
-    # shellcheck disable=SC2086
-    docker run $args >/dev/null
+    docker_run_built
     docker_attach_extra_networks
     docker_wait_for_connected || true
 
@@ -733,9 +748,7 @@ do_upgrade_docker() {
     trimmed=$(printf '%s' "$nets" | xargs)
     if [ -n "$trimmed" ]; then DOCKER_NETWORKS="$trimmed"; fi
 
-    args=$(docker_build_run_args)
-    # shellcheck disable=SC2086
-    docker run $args >/dev/null
+    docker_run_built
     docker_attach_extra_networks
     docker_wait_for_connected || true
     log "Upgrade complete."
