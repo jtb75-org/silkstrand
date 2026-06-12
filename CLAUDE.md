@@ -174,7 +174,8 @@ silkstrand/
 | **v0.1.50** | Fix `snapshot_hash` field on agent allowlist ingestion | ✅ shipped |
 | **v0.1.51** | Nginx SPA fallback fix (403 on deep-link refresh) | ✅ shipped |
 | **v0.1.52** | Flatten asset API response + Assets/Endpoints rendering fix + `time.ts` date formatting | ✅ shipped |
-| **Deferred** | Notification retry worker · email + pagerduty senders · vault resolvers (ADR 004 C1+) · `suggest_target` DB writeback · AWS cloud discovery (R2) | ⏸ |
+| **ADR 013** | Guided agent rollout (Deploy → Discover → Prove): `--allow-cidr` allowlist seeding (#353), `agent_allowlist` scan scope (#354), auto-discover on connect (#355), agent zones + install-time overlap preview/modal (#356), agent egress proxy + custom CA via centralized `nettls` transport (#357). ADR Accepted. | ✅ shipped |
+| **Deferred** | Notification retry worker · email + pagerduty senders · vault resolvers (ADR 004 C1+) · `suggest_target` DB writeback · AWS cloud discovery (R2) · **docker-mode proxy/CA** (binary mode covered; container needs env injection + CA volume mount) | ⏸ |
 
 ADR 004 (credential resolver) is at **C0** (plumbing — `credential_sources.type` now covers `static` plus the integration/vault slots reserved for C1+ resolvers; legacy `credentials` table dropped in migration 014). C1+ resolvers (AWS Secrets Manager / Vault / etc.) are planned but not started.
 
