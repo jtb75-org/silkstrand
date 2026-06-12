@@ -99,6 +99,7 @@ DOCKER_CAPS=""
 PRINT_COMPOSE=0
 
 log() { printf '==> %s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 parse_args() {
@@ -256,6 +257,30 @@ render_allowlist() {
     target="$1"
     trimmed=$(printf '%s' "$ALLOW_CIDRS" | xargs)
     if [ -z "$trimmed" ]; then
+        # No CIDRs given. Scaffold a commented, fail-closed template (unless one
+        # already exists) so the file is present and the format is discoverable
+        # — otherwise the agent starts with no allowlist and silently rejects
+        # every scan with no hint why.
+        if [ ! -f "$target" ]; then
+            install -d "$(dirname "$target")"
+            cat > "$target" <<'YAML'
+# SilkStrand scan allowlist.
+# The agent scans ONLY hosts/ranges listed under `allow:`. This file is the
+# final authority — the SaaS cannot override it. Until you add entries, every
+# scan is rejected (fail-closed). Edit, then no agent restart is needed.
+#
+# Example:
+#   allow:
+#     - 192.168.1.0/24        # CIDR
+#     - 10.0.0.5              # single IP
+#     - 10.0.0.10-10.0.0.50   # inclusive range
+#     - host.example.com      # hostname (exact or *.example.com)
+#   rate_limit_pps: 200       # optional, capped at 1000
+allow: []
+YAML
+            chmod 0644 "$target"
+            log "Scaffolded allowlist → $target (edit to authorize scanning; scans are rejected until you do)"
+        fi
         return 0
     fi
     install -d "$(dirname "$target")"
@@ -271,6 +296,16 @@ render_allowlist() {
 }
 
 install_service_linux() {
+    # --as-service assumes systemd. On a host without it (minimal images,
+    # containers), fail gracefully instead of erroring on `systemctl: not
+    # found` — the binary + creds are already installed, so point the user at
+    # the manual-run path.
+    if [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null 2>&1; then
+        warn "systemd not detected — cannot install a system service on this host."
+        log "The binary and credentials are installed; start the agent manually:"
+        print_manual_run
+        return 0
+    fi
     unit=/etc/systemd/system/silkstrand-agent.service
     cat > "$unit" <<EOF
 [Unit]
@@ -336,7 +371,11 @@ print_manual_run() {
 
 Next step (manual run — no service installed):
 
-  sudo sh -c '. $CONFIG_FILE && exec $INSTALL_DIR/silkstrand-agent'
+  sudo sh -c 'set -a; . $CONFIG_FILE; set +a; exec $INSTALL_DIR/silkstrand-agent'
+
+(The 'set -a' is required: $CONFIG_FILE holds plain KEY=value lines so it
+stays usable as a systemd EnvironmentFile, so sourcing alone won't export
+them to the agent.)
 
 Or re-run install.sh with --as-service to install a system service.
 EOF
