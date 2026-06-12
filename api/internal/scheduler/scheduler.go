@@ -211,6 +211,10 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 			"reported_at", snap.ReportedAt, "targets", len(entries))
 		// Deny is enforced agent-side (ADR 013 D4) — we dispatch allow entries
 		// as-is and let the agent re-vet locally. One scan per entry.
+		// NB: non-CIDR entries (IP/range/hostname) are upserted as targets.type
+		// ='cidr' since that's the only range-target upsert today; the agent
+		// keys off target_identifier so this works, but the target row's type is
+		// semantically loose — a typed range-target upsert is a future cleanup.
 		var firstErr error
 		for _, entry := range entries {
 			targetID, err := d.Store.UpsertTargetByCIDR(ctx, def.TenantID, entry, def.AgentID, "scheduled")
