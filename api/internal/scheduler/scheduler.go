@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jtb75/silkstrand/api/internal/events"
@@ -189,8 +190,63 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 			return fmt.Errorf("upserting cidr target: %w", err)
 		}
 		return d.dispatchOne(ctx, def, nil, &targetID)
+	case model.ScanDefinitionScopeAgentAllowlist:
+		if def.AgentID == nil {
+			return fmt.Errorf("scope=agent_allowlist requires agent_id")
+		}
+		snap, err := d.Store.GetAgentAllowlist(ctx, *def.AgentID)
+		if err != nil {
+			return fmt.Errorf("loading agent allowlist: %w", err)
+		}
+		// Fail-safe (ADR 013 D4): never silently broaden. A missing or empty
+		// snapshot blocks the run with an actionable message rather than
+		// scanning nothing — or, worse, defaulting to something broad.
+		entries := allowlistTargets(snap)
+		if len(entries) == 0 {
+			return fmt.Errorf("agent has not reported an allowlist yet; scope=agent_allowlist has nothing to scan")
+		}
+		// Transparency: the dispatch is pinned to this snapshot.
+		slog.Info("scheduler.agent_allowlist_dispatch", "definition", def.ID,
+			"agent", *def.AgentID, "snapshot_hash", snap.Hash,
+			"reported_at", snap.ReportedAt, "targets", len(entries))
+		// Deny is enforced agent-side (ADR 013 D4) — we dispatch allow entries
+		// as-is and let the agent re-vet locally. One scan per entry.
+		var firstErr error
+		for _, entry := range entries {
+			targetID, err := d.Store.UpsertTargetByCIDR(ctx, def.TenantID, entry, def.AgentID, "scheduled")
+			if err != nil {
+				slog.Warn("scheduler.agent_allowlist_target", "definition", def.ID, "entry", entry, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if err := d.dispatchOne(ctx, def, nil, &targetID); err != nil {
+				slog.Warn("scheduler.dispatch_one", "definition", def.ID, "entry", entry, "error", err)
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
 	}
 	return fmt.Errorf("unknown scope_kind: %q", def.ScopeKind)
+}
+
+// allowlistTargets returns an agent snapshot's allow entries (trimmed,
+// non-empty), or nil if the snapshot is missing/empty. deny is intentionally
+// not subtracted — the agent enforces deny locally (ADR 013 D4).
+func allowlistTargets(snap *store.AgentAllowlistSnapshot) []string {
+	if snap == nil {
+		return nil
+	}
+	out := make([]string, 0, len(snap.Allow))
+	for _, e := range snap.Allow {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (d Dispatcher) dispatchOne(ctx context.Context, def model.ScanDefinition, endpointID, targetID *string) error {

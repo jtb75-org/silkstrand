@@ -427,6 +427,10 @@ const (
 	ScanDefinitionScopeAssetEndpoint = "asset_endpoint"
 	ScanDefinitionScopeCollection    = "collection"
 	ScanDefinitionScopeCIDR          = "cidr"
+	// ScanDefinitionScopeAgentAllowlist scopes a discovery scan to whatever
+	// the agent currently reports in its scan-allowlist snapshot (ADR 013 D4).
+	// Resolved at dispatch time; requires agent_id.
+	ScanDefinitionScopeAgentAllowlist = "agent_allowlist"
 )
 
 // ----- Findings (ADR 007 D1) -------------------------------------

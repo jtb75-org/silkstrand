@@ -65,8 +65,15 @@ func (r *scanDefRequest) validateScope() error {
 		if r.AssetEndpointID != nil || r.CollectionID != nil {
 			return errors.New("scope=cidr must not set asset_endpoint_id or collection_id")
 		}
+	case model.ScanDefinitionScopeAgentAllowlist:
+		if r.AgentID == nil || *r.AgentID == "" {
+			return errors.New("scope=agent_allowlist requires agent_id")
+		}
+		if r.AssetEndpointID != nil || r.CollectionID != nil || (r.CIDR != nil && *r.CIDR != "") {
+			return errors.New("scope=agent_allowlist must not set asset_endpoint_id, collection_id, or cidr")
+		}
 	default:
-		return errors.New("scope_kind must be asset_endpoint | collection | cidr")
+		return errors.New("scope_kind must be asset_endpoint | collection | cidr | agent_allowlist")
 	}
 	return nil
 }
