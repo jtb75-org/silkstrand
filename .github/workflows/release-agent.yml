@@ -6,13 +6,14 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  id-token: write # required for GCP workload identity federation
+  contents: write # attach binaries to the GitHub Release
 
 env:
   GO_VERSION: "1.25"
   AGENT_RELEASES_BUCKET: silkstrand-agent-releases
-  AGENT_IMAGE_REGISTRY: us-central1-docker.pkg.dev/silkstrand-prod/silkstrand
+  S3_ENDPOINT: https://s3.ng20.org
+  # Customer agent image: public zot ingress (agents run in customer networks).
+  AGENT_IMAGE_REGISTRY: zot.ng20.org
 
 jobs:
   build-agent:
@@ -82,27 +83,28 @@ jobs:
           pattern: agent-*
           merge-multiple: true
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_PROD }}
-          service_account: ${{ vars.WIF_SA_PROD }}
+      - name: Set up MinIO client (mc)
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set silkstrand "${S3_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
 
-      - name: Upload binaries to GCS (versioned + latest)
+      - name: Upload binaries to MinIO (versioned + latest)
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          # Versioned folder — immutable. Default 1h CDN cache is fine.
-          gcloud storage cp silkstrand-agent-* gs://${AGENT_RELEASES_BUCKET}/${VERSION}/
-          # latest/ is rewritten every release — disable caching so the
-          # new binary is served immediately. Without this the public
-          # edge serves stale binaries for up to 1h after a release.
-          gcloud storage cp silkstrand-agent-* gs://${AGENT_RELEASES_BUCKET}/latest/ \
-            --cache-control="no-cache, max-age=0"
-          # install.sh is also rewritten every release — same treatment.
-          gcloud storage cp scripts/install-agent.sh gs://${AGENT_RELEASES_BUCKET}/install.sh \
-            --cache-control="no-cache, max-age=0"
-          gcloud storage objects update gs://${AGENT_RELEASES_BUCKET}/install.sh \
-            --content-type=text/x-shellscript
+          # Versioned folder — immutable.
+          mc cp silkstrand-agent-* "silkstrand/${AGENT_RELEASES_BUCKET}/${VERSION}/"
+          # latest/ is rewritten every release — set no-cache so the Cloudflare
+          # edge serves the new binary immediately instead of a stale one.
+          mc cp --attr "Cache-Control=no-cache,max-age=0" \
+            silkstrand-agent-* "silkstrand/${AGENT_RELEASES_BUCKET}/latest/"
+          # install.sh is also rewritten every release — same treatment, plus
+          # a shell content-type.
+          mc cp --attr "Cache-Control=no-cache,max-age=0;Content-Type=text/x-shellscript" \
+            scripts/install-agent.sh "silkstrand/${AGENT_RELEASES_BUCKET}/install.sh"
 
       - name: Attach to release
         uses: softprops/action-gh-release@v3
@@ -117,20 +119,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_PROD }}
-          service_account: ${{ vars.WIF_SA_PROD }}
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Log in to zot
+        env:
+          ZOT_USERNAME: ${{ secrets.ZOT_USERNAME }}
+          ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
+        run: echo "${ZOT_PASSWORD}" | docker login "${AGENT_IMAGE_REGISTRY}" -u "${ZOT_USERNAME}" --password-stdin
 
       - name: Build and push agent image
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          IMAGE_TAG="${{ env.AGENT_IMAGE_REGISTRY }}/agent:v${VERSION}"
-          IMAGE_LATEST="${{ env.AGENT_IMAGE_REGISTRY }}/agent:latest"
+          IMAGE_TAG="${{ env.AGENT_IMAGE_REGISTRY }}/silkstrand-agent:v${VERSION}"
+          IMAGE_LATEST="${{ env.AGENT_IMAGE_REGISTRY }}/silkstrand-agent:latest"
           docker build --build-arg VERSION="v${VERSION}" \
             -t "${IMAGE_TAG}" -t "${IMAGE_LATEST}" \
             -f agent/Dockerfile agent/

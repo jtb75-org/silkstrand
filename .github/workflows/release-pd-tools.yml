@@ -1,12 +1,10 @@
 name: Publish ProjectDiscovery Tools
 
 # One-shot upload of pinned naabu/httpx/nuclei binaries + curated
-# nuclei-templates tarball to gs://silkstrand-runtimes (ADR 003 R1a).
-# Trigger manually after picking versions; the agent's pdpins.go is
-# updated separately from the workflow output.
-#
-# A future workflow (Q2 from the recon planning) will run on a weekly
-# cron and auto-PR pin bumps; this one is the bootstrap.
+# nuclei-templates tarball to the MinIO silkstrand-runtimes bucket
+# (s3.ng20.org), which the agent pulls from (ADR 003 R1a). Trigger
+# manually after picking versions; the agent's pdpins.go is updated
+# separately from the workflow output.
 
 on:
   workflow_dispatch:
@@ -26,10 +24,10 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   RUNTIMES_BUCKET: silkstrand-runtimes
+  S3_ENDPOINT: https://s3.ng20.org
   PLATFORMS: |
     linux-amd64
     linux-arm64
@@ -43,14 +41,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.WIF_PROVIDER_PROD }}
-          service_account: ${{ vars.WIF_SA_PROD }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Set up MinIO client (mc)
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set silkstrand "${S3_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
 
       - name: Resolve versions
         id: ver
@@ -116,9 +114,8 @@ jobs:
               fi
               local sha=$(sha256sum "$bin" | cut -d' ' -f1)
               SHAS["${tool}/${ver}/${plat}"]=$sha
-              gcloud storage cp "$bin" \
-                "gs://${RUNTIMES_BUCKET}/${tool}/${ver}/${plat}/${exename}" \
-                --project=silkstrand-prod
+              mc cp "$bin" \
+                "silkstrand/${RUNTIMES_BUCKET}/${tool}/${ver}/${plat}/${exename}"
               echo "  sha256=$sha"
             done
             # Emit Go-friendly snippet for this tool.
@@ -159,12 +156,12 @@ jobs:
           for dir in fuzzing headless dns ssl; do
             rm -rf "extracted/$dir" || true
           done
-          # Repack.
+          # Repack. NOTE: tar/gzip output isn't byte-reproducible, so each run
+          # produces a new SHA256 — bump the pin in pdpins.go from the snippet.
           tar -czf "silkstrand-templates-${TVER}.tar.gz" -C extracted .
           SHA=$(sha256sum "silkstrand-templates-${TVER}.tar.gz" | cut -d' ' -f1)
-          gcloud storage cp "silkstrand-templates-${TVER}.tar.gz" \
-            "gs://${RUNTIMES_BUCKET}/nuclei-templates/${TVER}.tar.gz" \
-            --project=silkstrand-prod
+          mc cp "silkstrand-templates-${TVER}.tar.gz" \
+            "silkstrand/${RUNTIMES_BUCKET}/nuclei-templates/${TVER}.tar.gz"
           {
             echo ""
             echo "// nucleiTemplatesPin (paste over the existing var)"
