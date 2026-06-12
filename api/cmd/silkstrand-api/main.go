@@ -234,6 +234,7 @@ func run() error {
 	// returns 404 post-migration-017 because all rows are gone; promote
 	// returns 501 (superseded by scan_definitions).
 	apiMux.HandleFunc("GET /api/v1/assets", assetH.List)
+	apiMux.HandleFunc("POST /api/v1/assets/import-dns", assetH.ImportDNS)
 	apiMux.HandleFunc("GET /api/v1/asset-endpoints", assetH.ListEndpoints)
 	apiMux.HandleFunc("GET /api/v1/assets/{id}", assetH.Get)
 	apiMux.HandleFunc("GET /api/v1/assets/{id}/endpoints/{endpoint_id}", assetH.GetEndpoint)
