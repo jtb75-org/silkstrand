@@ -216,6 +216,10 @@ const (
 	resourceTypeHTTPService = "http_service" // wire value mirrors api model.ResourceTypeHTTPService
 )
 
+// lookupIP resolves a hostname agent-side (D11). A package var so tests can
+// inject resolution without real DNS.
+var lookupIP = net.LookupIP
+
 // classifyTarget distinguishes a CIDR, an IP range (IP-IP), a single IP, and a
 // hostname. A range requires IPs on *both* sides of the dash, so a hyphenated
 // hostname (my-app.example.com) is no longer misread as a range.
@@ -259,8 +263,16 @@ func vetTargetAgainstAllowlist(target string, allow *Allowlist) error {
 			return fmt.Errorf("allowlist_violation: %s", t)
 		}
 		return nil
-	default: // hostname — resolve and check every resolved IP.
-		ips, err := net.LookupIP(t)
+	default: // hostname
+		// D11 defense-in-depth: the NAME must be authorized by the local
+		// allowlist (host/wildcard entry) — the agent never scans a
+		// server-supplied name just because it happens to resolve into allowed
+		// space — AND every resolved IP must pass the IP allow/deny checks, so a
+		// listed name can't be pointed at an out-of-scope address via DNS.
+		if !allow.Allows(t) {
+			return fmt.Errorf("allowlist_violation: %s", t)
+		}
+		ips, err := lookupIP(t)
 		if err != nil || len(ips) == 0 {
 			return fmt.Errorf("allowlist_violation: cannot resolve %s", t)
 		}
