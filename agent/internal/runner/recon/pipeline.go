@@ -10,10 +10,37 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jtb75/silkstrand/agent/internal/tunnel"
 )
+
+// progressInterval is how often a long recon stage emits a progress line at
+// INFO so the live agent console isn't silent while naabu/httpx/nuclei work.
+const progressInterval = 10 * time.Second
+
+// startProgress logs msg + the current attrs() every interval until the
+// returned stop() is called (or ctx is cancelled). attrs() must be safe to call
+// concurrently with the stage's onFinding callback.
+func startProgress(ctx context.Context, interval time.Duration, msg string, attrs func() []any) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-t.C:
+				slog.InfoContext(ctx, msg, attrs()...)
+			}
+		}
+	}()
+	return func() { close(done) }
+}
 
 // DiscoveryConfig is the agent-side parse of DirectivePayload.TargetConfig
 // for a discovery directive (mirrors api/internal/websocket.DiscoveryConfig).
@@ -87,9 +114,16 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	}
 	slog.InfoContext(ctx, "naabu: port-scanning target", "scan_id", req.ScanID,
 		"target", req.TargetIdentifier, "rate_pps", pps)
-	if err := runNaabu(ctx, req.TargetIdentifier, pps, naabuOnFinding); err != nil {
+	stopNaabuProgress := startProgress(ctx, progressInterval, "naabu: scanning", func() []any {
+		naabuMu.Lock()
+		defer naabuMu.Unlock()
+		return []any{"scan_id", req.ScanID, "open_ports", len(findings), "hosts", len(hostsSeen)}
+	})
+	naabuErr := runNaabu(ctx, req.TargetIdentifier, pps, naabuOnFinding)
+	stopNaabuProgress()
+	if naabuErr != nil {
 		naabuBatcher.Flush()
-		return nil, err
+		return nil, naabuErr
 	}
 	naabuBatcher.Flush()
 	slog.InfoContext(ctx, "naabu: complete", "scan_id", req.ScanID,
@@ -146,9 +180,16 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 		httpxBatcher.Add(up)
 	}
 	slog.InfoContext(ctx, "httpx: fingerprinting services", "scan_id", req.ScanID, "inputs", len(httpInputs))
-	if err := runHTTPX(ctx, httpInputs, httpxOnFinding); err != nil {
+	stopHTTPXProgress := startProgress(ctx, progressInterval, "httpx: fingerprinting", func() []any {
+		httpxMu.Lock()
+		defer httpxMu.Unlock()
+		return []any{"scan_id", req.ScanID, "services", len(httpxFindings), "of", len(httpInputs)}
+	})
+	httpxErr := runHTTPX(ctx, httpInputs, httpxOnFinding)
+	stopHTTPXProgress()
+	if httpxErr != nil {
 		httpxBatcher.Flush()
-		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
+		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, httpxErr
 	}
 	httpxBatcher.Flush()
 	slog.InfoContext(ctx, "httpx: complete", "scan_id", req.ScanID, "http_services", len(httpxFindings))
@@ -164,13 +205,14 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	defer nucleiBatcher.Stop()
 
 	cveByEndpoint := map[string][]map[string]any{}
-	nucleiHits := 0
+	// atomic so the progress logger can read it concurrently with onHit.
+	var nucleiHits atomic.Int64
 	nucleiOnHit := func(h NucleiHit) {
 		ip, port := splitURLToIPPort(h.URL, httpxFindings)
 		if ip == "" {
 			return
 		}
-		nucleiHits++
+		nucleiHits.Add(1)
 		key := fmt.Sprintf("%s:%d", ip, port)
 		entry := map[string]any{
 			"id":       firstCVE(h.CVEs, h.TemplateID),
@@ -195,13 +237,18 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	}
 	nucleiURLs := dedupe(urls)
 	slog.InfoContext(ctx, "nuclei: scanning for vulnerabilities", "scan_id", req.ScanID, "urls", len(nucleiURLs))
-	if err := runNuclei(ctx, nucleiURLs, nucleiOnHit); err != nil {
+	stopNucleiProgress := startProgress(ctx, progressInterval, "nuclei: scanning", func() []any {
+		return []any{"scan_id", req.ScanID, "hits", nucleiHits.Load(), "urls", len(nucleiURLs)}
+	})
+	nucleiErr := runNuclei(ctx, nucleiURLs, nucleiOnHit)
+	stopNucleiProgress()
+	if nucleiErr != nil {
 		nucleiBatcher.Flush()
 		// Nuclei errors don't sink prior stage results.
-		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, err
+		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nucleiErr
 	}
 	nucleiBatcher.Flush()
-	slog.InfoContext(ctx, "nuclei: complete", "scan_id", req.ScanID, "findings", nucleiHits)
+	slog.InfoContext(ctx, "nuclei: complete", "scan_id", req.ScanID, "findings", nucleiHits.Load())
 
 	return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
 }
