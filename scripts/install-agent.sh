@@ -76,7 +76,8 @@
 #                          and switch naabu back to SYN scan. Default: no
 #                          caps, naabu CONNECT mode.
 #   --image-registry=REG   Override image registry base.
-#                          Default us-central1-docker.pkg.dev/silkstrand-prod/silkstrand
+#                          Default zot.ng20.org (public registry for the
+#                          customer agent image).
 #   --print-compose        Emit a docker-compose.yaml snippet for the
 #                          requested config on stdout instead of
 #                          running the container. Implies --mode=docker.
@@ -91,7 +92,10 @@ MODE="binary"
 INSTALL_DIR="/usr/local/bin"
 VERSION="latest"
 RELEASE_URL="https://downloads.silkstrand.io/agent"
-IMAGE_REGISTRY="us-central1-docker.pkg.dev/silkstrand-prod/silkstrand"
+# Public registry for the customer agent image (zot.ng20.org/silkstrand-agent).
+# The old GCP Artifact Registry default was a stale leftover from the GCP→zot
+# migration that made docker-mode installs fail at `docker pull`.
+IMAGE_REGISTRY="zot.ng20.org"
 TOKEN=""
 API_URL=""
 NAME="$(uname -n 2>/dev/null || echo agent)"
