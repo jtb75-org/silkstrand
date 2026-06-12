@@ -33,7 +33,7 @@ metadata:
   namespace: silkstrand
 stringData:
   install-token: sst_REPLACE_ME      # from SilkStrand UI; valid 1h
-  api-url: https://REPLACE.run.app   # your DC API URL
+  api-url: https://api.REPLACE.silkstrand.io   # your public DC API URL
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -66,7 +66,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: agent
-          image: us-central1-docker.pkg.dev/silkstrand-prod/silkstrand/agent:latest
+          image: zot.ng20.org/silkstrand-agent:latest
           imagePullPolicy: Always
           env:
             - name: SILKSTRAND_INSTALL_TOKEN

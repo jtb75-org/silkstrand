@@ -1,0 +1,318 @@
+name: Build and Push Platform Images
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: zot.lan.ng20.org
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.set.outputs.api }}
+      web: ${{ steps.set.outputs.web }}
+      backoffice_api: ${{ steps.set.outputs.backoffice_api }}
+      backoffice_web: ${{ steps.set.outputs.backoffice_web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Filter changed paths
+        if: github.event_name == 'push'
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ github.event.before }}
+          filters: |
+            api:
+              - 'api/**'
+              - 'controls/**'
+            web:
+              - 'web/**'
+            backoffice_api:
+              - 'backoffice/**'
+              - '!backoffice/web/**'
+            backoffice_web:
+              - 'backoffice/web/**'
+
+      - name: Set outputs
+        id: set
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "api=true" >> "$GITHUB_OUTPUT"
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            echo "backoffice_api=true" >> "$GITHUB_OUTPUT"
+            echo "backoffice_web=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "api=${{ steps.filter.outputs.api }}" >> "$GITHUB_OUTPUT"
+            echo "web=${{ steps.filter.outputs.web }}" >> "$GITHUB_OUTPUT"
+            echo "backoffice_api=${{ steps.filter.outputs.backoffice_api }}" >> "$GITHUB_OUTPUT"
+            echo "backoffice_web=${{ steps.filter.outputs.backoffice_web }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-api:
+    name: Build and Push API
+    runs-on: jtb75-arc
+    needs: [changes]
+    if: needs.changes.outputs.api == 'true'
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: |
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure registry auth
+        env:
+          ZOT_USERNAME: ${{ secrets.ZOT_USERNAME }}
+          ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
+        run: |
+          AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
+          printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /root/.docker/config.json
+          printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
+
+      - name: Kaniko build and push
+        run: |
+          /opt/kaniko/executor \
+            --context="${GITHUB_WORKSPACE}" \
+            --dockerfile="${GITHUB_WORKSPACE}/api/Dockerfile" \
+            --destination="${REGISTRY}/silkstrand-api:sha-${{ steps.sha.outputs.short }}" \
+            --destination="${REGISTRY}/silkstrand-api:main-latest" \
+            --snapshot-mode=redo
+
+  build-web:
+    name: Build and Push Web
+    runs-on: jtb75-arc
+    needs: [changes]
+    if: needs.changes.outputs.web == 'true'
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: |
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure registry auth
+        env:
+          ZOT_USERNAME: ${{ secrets.ZOT_USERNAME }}
+          ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
+        run: |
+          AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
+          printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /root/.docker/config.json
+          printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
+
+      - name: Kaniko build and push
+        run: |
+          /opt/kaniko/executor \
+            --context="${GITHUB_WORKSPACE}/web" \
+            --dockerfile="${GITHUB_WORKSPACE}/web/Dockerfile" \
+            --destination="${REGISTRY}/silkstrand-web:sha-${{ steps.sha.outputs.short }}" \
+            --destination="${REGISTRY}/silkstrand-web:main-latest" \
+            --snapshot-mode=redo
+
+  build-backoffice-api:
+    name: Build and Push Backoffice API
+    runs-on: jtb75-arc
+    needs: [changes]
+    if: needs.changes.outputs.backoffice_api == 'true'
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: |
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure registry auth
+        env:
+          ZOT_USERNAME: ${{ secrets.ZOT_USERNAME }}
+          ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
+        run: |
+          AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
+          printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /root/.docker/config.json
+          printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
+
+      - name: Kaniko build and push
+        run: |
+          /opt/kaniko/executor \
+            --context="${GITHUB_WORKSPACE}/backoffice" \
+            --dockerfile="${GITHUB_WORKSPACE}/backoffice/Dockerfile" \
+            --destination="${REGISTRY}/silkstrand-backoffice-api:sha-${{ steps.sha.outputs.short }}" \
+            --destination="${REGISTRY}/silkstrand-backoffice-api:main-latest" \
+            --snapshot-mode=redo
+
+  build-backoffice-web:
+    name: Build and Push Backoffice Web
+    runs-on: jtb75-arc
+    needs: [changes]
+    if: needs.changes.outputs.backoffice_web == 'true'
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Short SHA
+        id: sha
+        run: |
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure registry auth
+        env:
+          ZOT_USERNAME: ${{ secrets.ZOT_USERNAME }}
+          ZOT_PASSWORD: ${{ secrets.ZOT_PASSWORD }}
+        run: |
+          AUTH=$(printf '%s:%s' "${ZOT_USERNAME}" "${ZOT_PASSWORD}" | base64 | tr -d '\n')
+          CONFIG=$(printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${AUTH}")
+          mkdir -p /kaniko/.docker /opt/kaniko/.docker /root/.docker "${HOME:-/root}/.docker"
+          printf '%s\n' "${CONFIG}" > /kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /opt/kaniko/.docker/config.json
+          printf '%s\n' "${CONFIG}" > /root/.docker/config.json
+          printf '%s\n' "${CONFIG}" > "${HOME:-/root}/.docker/config.json"
+
+      - name: Kaniko build and push
+        run: |
+          /opt/kaniko/executor \
+            --context="${GITHUB_WORKSPACE}/backoffice/web" \
+            --dockerfile="${GITHUB_WORKSPACE}/backoffice/web/Dockerfile" \
+            --destination="${REGISTRY}/silkstrand-backoffice-web:sha-${{ steps.sha.outputs.short }}" \
+            --destination="${REGISTRY}/silkstrand-backoffice-web:main-latest" \
+            --snapshot-mode=redo
+
+  bump-gitops:
+    name: Bump GitOps Image Tags
+    runs-on: jtb75-arc
+    needs:
+      - changes
+      - build-api
+      - build-web
+      - build-backoffice-api
+      - build-backoffice-web
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (
+        needs.changes.outputs.api == 'true' ||
+        needs.changes.outputs.web == 'true' ||
+        needs.changes.outputs.backoffice_api == 'true' ||
+        needs.changes.outputs.backoffice_web == 'true'
+      )
+    container:
+      image: zot.lan.ng20.org/atlas/builder:latest
+    timeout-minutes: 10
+    steps:
+      - name: Short SHA
+        id: sha
+        run: |
+          short=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          echo "tag=sha-${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout silkstrand-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: jtb75-org/silkstrand-gitops
+          token: ${{ secrets.GITOPS_DEPLOY_TOKEN }}
+          path: silkstrand-gitops
+          persist-credentials: true
+
+      - name: Update image tags
+        working-directory: silkstrand-gitops
+        env:
+          NEW_TAG: ${{ steps.sha.outputs.tag }}
+          API_CHANGED: ${{ needs.changes.outputs.api }}
+          WEB_CHANGED: ${{ needs.changes.outputs.web }}
+          BACKOFFICE_API_CHANGED: ${{ needs.changes.outputs.backoffice_api }}
+          BACKOFFICE_WEB_CHANGED: ${{ needs.changes.outputs.backoffice_web }}
+        run: |
+          update_tag() {
+            file="$1"
+            image="$2"
+            tmp="$(mktemp)"
+            awk -v image="$image" -v tag="$NEW_TAG" '
+              $0 ~ "^[[:space:]]*-?[[:space:]]*name:[[:space:]]*" image "$" { in_image=1; print; next }
+              in_image && $0 ~ "^[[:space:]]*newTag:" {
+                sub(/newTag:.*/, "newTag: \"" tag "\"")
+                in_image=0
+              }
+              { print }
+            ' "$file" > "$tmp"
+            mv "$tmp" "$file"
+          }
+
+          if [ "${API_CHANGED}" = "true" ]; then
+            update_tag apps/dc-us/overlays/onprem/kustomization.yaml "${REGISTRY}/silkstrand-api"
+          fi
+          if [ "${WEB_CHANGED}" = "true" ]; then
+            update_tag apps/dc-us/overlays/onprem/kustomization.yaml "${REGISTRY}/silkstrand-web"
+          fi
+          if [ "${BACKOFFICE_API_CHANGED}" = "true" ]; then
+            update_tag apps/backoffice/overlays/onprem/kustomization.yaml "${REGISTRY}/silkstrand-backoffice-api"
+          fi
+          if [ "${BACKOFFICE_WEB_CHANGED}" = "true" ]; then
+            update_tag apps/backoffice/overlays/onprem/kustomization.yaml "${REGISTRY}/silkstrand-backoffice-web"
+          fi
+
+          git diff -- apps/dc-us/overlays/onprem/kustomization.yaml apps/backoffice/overlays/onprem/kustomization.yaml
+
+      - name: Commit and push
+        working-directory: silkstrand-gitops
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_DEPLOY_TOKEN }}
+          NEW_TAG: ${{ steps.sha.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITOPS_TOKEN}@github.com/jtb75-org/silkstrand-gitops.git"
+          git add apps/dc-us/overlays/onprem/kustomization.yaml apps/backoffice/overlays/onprem/kustomization.yaml
+          if git diff --staged --quiet; then
+            echo "No image tag changes to commit."
+            exit 0
+          fi
+          git commit -m "deploy: silkstrand platform images ${NEW_TAG}"
+          git push origin HEAD:main
