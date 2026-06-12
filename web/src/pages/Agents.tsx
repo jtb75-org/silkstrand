@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listAgents, rotateAgentKey, deleteAgent, getAgentDownloads,
   createInstallToken, upgradeAgent, getAgentAllowlist,
-  listScans,
-  type AgentAllowlist,
+  listScans, previewAllowlist,
+  type AgentAllowlist, type AllowlistPreview,
 } from '../api/client';
 import type { Agent, AgentDownloads, Scan } from '../api/types';
 import { useAuth } from '../auth/useAuth';
@@ -67,15 +67,53 @@ export default function Agents() {
     setAllowCidrs((a) => a.map((x, j) => (j === i ? v : x)));
   const removeAllow = (i: number) => setAllowCidrs((a) => a.filter((_, j) => j !== i));
 
+  const cleanAllow = allowCidrs.map((c) => c.trim()).filter(Boolean);
+
+  // Zone/site label (ADR 013 D10): optional, disambiguates reused private
+  // ranges for the overlap heuristic. Server-side metadata — not a curl flag.
+  const [zone, setZone] = useState('');
+
   // Auto-discover on connect (ADR 013 D5). Recurring is opt-in, default Off.
   const [autoDiscover, setAutoDiscover] = useState(true);
   const [discoverSchedule, setDiscoverSchedule] = useState<'off' | 'daily' | 'weekly'>('off');
 
+  // ADR 013 D6: overlap confirmation. Non-null = modal open; the operator can
+  // always proceed (overlap is a heuristic, never a block).
+  const [overlapPreview, setOverlapPreview] = useState<AllowlistPreview | null>(null);
+
   const tokenMutation = useMutation({
     mutationFn: () =>
-      createInstallToken({ auto_discover: autoDiscover, discover_schedule: discoverSchedule }),
-    onSuccess: (res) => setInstallToken({ token: res.install_token, expiresAt: res.expires_at }),
+      createInstallToken({
+        auto_discover: autoDiscover,
+        discover_schedule: discoverSchedule,
+        zone: zone.trim() || undefined,
+      }),
+    onSuccess: (res) => {
+      setOverlapPreview(null);
+      setInstallToken({ token: res.install_token, expiresAt: res.expires_at });
+    },
   });
+
+  // Generate runs the overlap preview first; only ranges actually trigger it.
+  const previewMutation = useMutation({
+    mutationFn: () => previewAllowlist(cleanAllow, zone.trim() || undefined),
+    onSuccess: (res) => {
+      if (res.overlaps.length > 0 || res.redundant.length > 0) {
+        setOverlapPreview(res); // surface the modal; operator confirms
+      } else {
+        tokenMutation.mutate(); // clean — mint straight away
+      }
+    },
+  });
+
+  const handleGenerate = () => {
+    setInstallToken(null);
+    if (cleanAllow.length === 0) {
+      tokenMutation.mutate(); // nothing to overlap-check
+    } else {
+      previewMutation.mutate();
+    }
+  };
 
   const rotateMutation = useMutation({
     mutationFn: (id: string) => rotateAgentKey(id),
@@ -104,7 +142,6 @@ export default function Agents() {
     },
   });
 
-  const cleanAllow = allowCidrs.map((c) => c.trim()).filter(Boolean);
   const oneLiner = installToken && apiURL && installScriptURL
     ? `curl -sSL ${installScriptURL} | sudo sh -s -- \\\n  ${[
         `--token=${installToken.token}`,
@@ -128,6 +165,25 @@ export default function Agents() {
           the command on the host that should run the agent. The agent
           registers itself automatically.
         </p>
+
+        <div style={{ margin: '12px 0 16px' }}>
+          <label style={{ fontWeight: 600, fontSize: 14 }} htmlFor="agent-zone">
+            Zone / site{' '}
+            <span className="muted" style={{ fontWeight: 400 }}>(optional)</span>
+          </label>
+          <input
+            id="agent-zone"
+            type="text"
+            placeholder="office-east"
+            value={zone}
+            onChange={(e) => setZone(e.target.value)}
+            style={{ display: 'block', marginTop: 6, maxWidth: 320 }}
+          />
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Disambiguates the same private ranges reused at different sites, so the
+            overlap check doesn't false-alarm. Stored server-side, not in the command.
+          </p>
+        </div>
 
         <div style={{ margin: '12px 0 16px' }}>
           <label style={{ fontWeight: 600, fontSize: 14 }}>
@@ -203,10 +259,10 @@ export default function Agents() {
 
         <button
           className="btn btn-primary"
-          disabled={tokenMutation.isPending || !apiURL || !installScriptURL}
-          onClick={() => tokenMutation.mutate()}
+          disabled={tokenMutation.isPending || previewMutation.isPending || !apiURL || !installScriptURL}
+          onClick={handleGenerate}
         >
-          {tokenMutation.isPending ? 'Generating…' : 'Generate install command'}
+          {tokenMutation.isPending || previewMutation.isPending ? 'Generating…' : 'Generate install command'}
         </button>
         {!installScriptURL && (
           <p className="muted" style={{ fontSize: 13 }}>
@@ -215,6 +271,9 @@ export default function Agents() {
         )}
         {tokenMutation.error && (
           <p className="error">{(tokenMutation.error as Error).message}</p>
+        )}
+        {previewMutation.error && (
+          <p className="error">{(previewMutation.error as Error).message}</p>
         )}
 
         {installToken && oneLiner && (
@@ -283,7 +342,14 @@ export default function Agents() {
           <tbody>
             {agents.map((a) => (
               <tr key={a.id}>
-                <td>{a.name}</td>
+                <td>
+                  {a.name}
+                  {a.zone && (
+                    <span className="muted" style={{ display: 'block', fontSize: 12 }}>
+                      zone: {a.zone}
+                    </span>
+                  )}
+                </td>
                 <td className="text-muted" style={{ fontSize: 12 }}>{a.id.slice(0, 8)}…</td>
                 <td>
                   {a.status}
@@ -370,6 +436,58 @@ export default function Agents() {
 
       {consoleFor && (
         <ConsoleDrawer agent={consoleFor} onClose={() => setConsoleFor(null)} />
+      )}
+
+      {overlapPreview && (
+        <div className="modal-backdrop" onClick={() => setOverlapPreview(null)}>
+          <div className="form-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>⚠️ These ranges may already be scanned</h3>
+            {overlapPreview.overlaps.length > 0 && (
+              <>
+                <p style={{ marginBottom: 8 }}>
+                  Another agent already discovers across overlapping ranges. If they
+                  see the <strong>same network</strong>, you'll scan these hosts twice.
+                </p>
+                <ul style={{ margin: '0 0 12px', paddingLeft: 18 }}>
+                  {overlapPreview.overlaps.map((o, i) => (
+                    <li key={i} style={{ marginBottom: 4 }}>
+                      <code>{o.cidr}</code> overlaps agent{' '}
+                      <strong>{o.conflicts_with.name || o.conflicts_with.id}</strong>{' '}
+                      (allowlist <code>{o.conflicts_with.range}</code>
+                      {o.conflicts_with.zone ? `, zone ${o.conflicts_with.zone}` : ''})
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {overlapPreview.redundant.length > 0 && (
+              <>
+                <p style={{ marginBottom: 8 }}>Some entries are redundant:</p>
+                <ul style={{ margin: '0 0 12px', paddingLeft: 18 }}>
+                  {overlapPreview.redundant.map((r, i) => (
+                    <li key={i} style={{ marginBottom: 4 }}>{r}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <p className="muted" style={{ fontSize: 13 }}>
+              Overlap is a hint, not a rule — the same private range at two sites is
+              fine. Add a zone to silence this, or proceed if it's intentional.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button className="btn" onClick={() => setOverlapPreview(null)} disabled={tokenMutation.isPending}>
+                Adjust ranges
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={tokenMutation.isPending}
+                onClick={() => tokenMutation.mutate()}
+              >
+                {tokenMutation.isPending ? 'Generating…' : 'Proceed anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -405,9 +405,9 @@ func (s *PostgresStore) GetAgent(ctx context.Context, id string) (*model.Agent, 
 	tenantID := TenantID(ctx)
 	var a model.Agent
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
 		   FROM agents WHERE id = $1 AND tenant_id = $2`, id, tenantID).
-		Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt)
+		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -421,9 +421,9 @@ func (s *PostgresStore) GetAgentByID(ctx context.Context, id string) (*model.Age
 	var a model.Agent
 	var keyHash sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at
 		   FROM agents WHERE id = $1`, id).
-		Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version,
+		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version,
 			&keyHash, &a.NextKeyHash, &a.KeyRotatedAt, &a.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -452,11 +452,11 @@ func (s *PostgresStore) CreateAgent(ctx context.Context, req model.CreateAgentRe
 	}
 	var a model.Agent
 	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO agents (tenant_id, name, version, key_hash, auto_discover_pending, discover_cron)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, tenant_id, name, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at`,
-		req.TenantID, req.Name, req.Version, keyHash, req.AutoDiscoverPending, req.DiscoverCron).
-		Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version,
+		`INSERT INTO agents (tenant_id, name, zone, version, key_hash, auto_discover_pending, discover_cron)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id, tenant_id, name, zone, status, last_heartbeat, version, key_hash, next_key_hash, key_rotated_at, created_at`,
+		req.TenantID, req.Name, req.Zone, req.Version, keyHash, req.AutoDiscoverPending, req.DiscoverCron).
+		Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version,
 			&a.KeyHash, &a.NextKeyHash, &a.KeyRotatedAt, &a.CreatedAt)
 	if err != nil {
 		return nil, "", fmt.Errorf("creating agent: %w", err)
@@ -523,7 +523,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 		return nil, fmt.Errorf("tenant not set in context")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, name, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
 		   FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("listing agents: %w", err)
@@ -532,7 +532,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	var out []model.Agent
 	for rows.Next() {
 		var a model.Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning agent: %w", err)
 		}
 		out = append(out, a)
@@ -542,7 +542,7 @@ func (s *PostgresStore) ListAgents(ctx context.Context) ([]model.Agent, error) {
 
 func (s *PostgresStore) ListAllAgents(ctx context.Context) ([]model.Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, name, status, last_heartbeat, version, created_at
+		`SELECT id, tenant_id, name, zone, status, last_heartbeat, version, created_at
 		   FROM agents ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing all agents: %w", err)
@@ -551,7 +551,7 @@ func (s *PostgresStore) ListAllAgents(ctx context.Context) ([]model.Agent, error
 	var agents []model.Agent
 	for rows.Next() {
 		var a model.Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.Zone, &a.Status, &a.LastHeartbeat, &a.Version, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning agent: %w", err)
 		}
 		agents = append(agents, a)
@@ -586,9 +586,9 @@ func (s *PostgresStore) CreateInstallToken(ctx context.Context, in CreateInstall
 		createdByArg = in.CreatedBy
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO install_tokens (token_hash, tenant_id, created_by, expires_at, auto_discover, discover_cron)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		in.TokenHash, in.TenantID, createdByArg, in.ExpiresAt, in.AutoDiscover, in.DiscoverCron)
+		`INSERT INTO install_tokens (token_hash, tenant_id, created_by, expires_at, auto_discover, discover_cron, zone)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		in.TokenHash, in.TenantID, createdByArg, in.ExpiresAt, in.AutoDiscover, in.DiscoverCron, in.Zone)
 	if err != nil {
 		return fmt.Errorf("creating install token: %w", err)
 	}
@@ -601,8 +601,8 @@ func (s *PostgresStore) ConsumeInstallToken(ctx context.Context, tokenHash []byt
 		`UPDATE install_tokens
 		   SET used_at = NOW(), used_agent_id = $2
 		 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
-		 RETURNING tenant_id, auto_discover, discover_cron`,
-		tokenHash, agentID).Scan(&out.TenantID, &out.AutoDiscover, &out.DiscoverCron)
+		 RETURNING tenant_id, auto_discover, discover_cron, zone`,
+		tokenHash, agentID).Scan(&out.TenantID, &out.AutoDiscover, &out.DiscoverCron, &out.Zone)
 	if err == sql.ErrNoRows {
 		return nil, sql.ErrNoRows
 	}

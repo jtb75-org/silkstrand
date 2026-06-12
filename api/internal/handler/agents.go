@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jtb75/silkstrand/api/internal/allowlist"
 	"github.com/jtb75/silkstrand/api/internal/audit"
 	"github.com/jtb75/silkstrand/api/internal/crypto"
 	"github.com/jtb75/silkstrand/api/internal/events"
@@ -308,6 +310,36 @@ func discoverScheduleToCron(sched string) (*string, error) {
 	return nil, fmt.Errorf("discover_schedule must be off, daily, or weekly")
 }
 
+// normalizeZone turns a free-text site label into a bounded slug for ADR 013
+// D10: lowercase, runs of non-alphanumeric collapsed to single hyphens, edges
+// trimmed, capped at 63 chars. Empty-after-normalization returns nil (unset),
+// which the overlap heuristic treats conservatively (always warn).
+func normalizeZone(s string) *string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if len(slug) > 63 {
+		slug = strings.Trim(slug[:63], "-")
+	}
+	if slug == "" {
+		return nil
+	}
+	return &slug
+}
+
 // POST /api/v1/agents/install-tokens (authenticated, tenant-scoped)
 // Body: {} (no fields yet)
 // Returns a one-time install token (1h, single-use) bound to this tenant.
@@ -323,6 +355,7 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		AutoDiscover     bool   `json:"auto_discover"`
 		DiscoverSchedule string `json:"discover_schedule"` // "" | off | daily | weekly
+		Zone             string `json:"zone"`              // ADR 013 D10: optional site label
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -337,6 +370,7 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 		}
 		discoverCron = c
 	}
+	zone := normalizeZone(req.Zone) // nil if empty-after-trim
 
 	plaintext, tokenHash, err := crypto.NewInstallToken()
 	if err != nil {
@@ -358,6 +392,7 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 		CreatedBy:    createdBy,
 		AutoDiscover: req.AutoDiscover,
 		DiscoverCron: discoverCron,
+		Zone:         zone,
 	}); err != nil {
 		slog.Error("storing install token", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed")
@@ -368,6 +403,184 @@ func (h *AgentsHandler) CreateInstallToken(w http.ResponseWriter, r *http.Reques
 		"install_token": plaintext,
 		"expires_at":    expiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// overlapSource is one discovering range to check operator input against.
+type overlapSource struct {
+	kind     string // "agent" | "scan_definition"
+	ownerID  string
+	name     string
+	zone     *string
+	iv       allowlist.Interval
+	rangeStr string
+}
+
+// POST /api/v1/agents/allowlist-preview (authenticated, tenant-scoped)
+// Body: {cidrs: ["10.0.0.0/24", ...], zone?: "office-east"}
+// ADR 013 D6: warn (never block) when the ranges an operator is about to seed
+// overlap with another agent that actually discovers — double-scanning the
+// customer's network wastes load and muddies attribution. Returns
+// {overlaps, redundant}; the panel shows a confirmation modal but always lets
+// the operator proceed. This is UI guidance, never an authorization boundary.
+func (h *AgentsHandler) AllowlistPreview(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetClaims(r.Context())
+	if claims == nil || claims.TenantID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req struct {
+		CIDRs []string `json:"cidrs"`
+		Zone  string   `json:"zone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	inputZone := normalizeZone(req.Zone)
+
+	// Only address ranges participate; hostnames are skipped (no range to
+	// intersect). CIDR, bare IP, and "a-b" range all reduce to an interval.
+	type parsedRange struct {
+		raw string
+		iv  allowlist.Interval
+	}
+	var inputs []parsedRange
+	for _, c := range req.CIDRs {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if iv, ok := allowlist.ParseInterval(c); ok {
+			inputs = append(inputs, parsedRange{raw: c, iv: iv})
+		}
+	}
+
+	// (1) Intra-input redundancy: a typed range fully inside another typed one.
+	redundant := []string{}
+	for i := 0; i < len(inputs); i++ {
+		for j := i + 1; j < len(inputs); j++ {
+			a, b := inputs[i], inputs[j]
+			switch {
+			case a.iv.Contains(b.iv) && b.iv.Contains(a.iv):
+				redundant = append(redundant, fmt.Sprintf("%s duplicates %s", b.raw, a.raw))
+			case a.iv.Contains(b.iv):
+				redundant = append(redundant, fmt.Sprintf("%s is contained in %s (also entered)", b.raw, a.raw))
+			case b.iv.Contains(a.iv):
+				redundant = append(redundant, fmt.Sprintf("%s is contained in %s (also entered)", a.raw, b.raw))
+			}
+		}
+	}
+
+	// (2) Overlap with other agents that actually discover.
+	sources := h.discoverySources(r.Context())
+	overlaps := []map[string]any{}
+	seen := map[string]bool{}
+	for _, in := range inputs {
+		for _, src := range sources {
+			if !in.iv.Overlaps(src.iv) {
+				continue
+			}
+			// Zone-aware suppression (D10): only when both sides carry a zone,
+			// the zones differ, and *both* ranges are wholly private — so the
+			// shared addresses are private too. Public overlap (either side not
+			// wholly private), or any unset zone, always warns (conservative).
+			if inputZone != nil && src.zone != nil && *inputZone != *src.zone &&
+				in.iv.Private() && src.iv.Private() {
+				continue
+			}
+			key := in.raw + "|" + src.rangeStr + "|" + src.ownerID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			overlaps = append(overlaps, map[string]any{
+				"cidr": in.raw,
+				"conflicts_with": map[string]any{
+					"kind":              src.kind,
+					"name":              src.name,
+					"id":                src.ownerID,
+					"range":             src.rangeStr,
+					"zone":              src.zone,
+					"discovery_enabled": true,
+				},
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"overlaps":  overlaps,
+		"redundant": redundant,
+	})
+}
+
+// discoverySources collects every range in this tenant that is actively
+// discovered: an enabled discovery scan_definition scoped to cidr or
+// agent_allowlist. Compliance definitions (endpoint-scoped) are skipped — they
+// target endpoints, not ranges, so they never double-scan a CIDR.
+func (h *AgentsHandler) discoverySources(ctx context.Context) []overlapSource {
+	defs, err := h.store.ListScanDefinitions(ctx)
+	if err != nil {
+		slog.Error("allowlist-preview: listing scan definitions", "error", err)
+		return nil
+	}
+	agents, err := h.store.ListAgents(ctx)
+	if err != nil {
+		slog.Error("allowlist-preview: listing agents", "error", err)
+		// continue with empty agent map — owner labels degrade, overlap math holds
+	}
+	agentByID := make(map[string]model.Agent, len(agents))
+	for _, a := range agents {
+		agentByID[a.ID] = a
+	}
+
+	var sources []overlapSource
+	snapCache := map[string]*store.AgentAllowlistSnapshot{}
+	add := func(agentID *string, rangeStr string) {
+		iv, ok := allowlist.ParseInterval(rangeStr)
+		if !ok {
+			return
+		}
+		src := overlapSource{kind: "scan_definition", iv: iv, rangeStr: rangeStr}
+		if agentID != nil {
+			if a, ok := agentByID[*agentID]; ok {
+				src.kind = "agent"
+				src.ownerID = a.ID
+				src.name = a.Name
+				src.zone = a.Zone
+			} else {
+				src.ownerID = *agentID
+			}
+		}
+		sources = append(sources, src)
+	}
+
+	for _, d := range defs {
+		if !d.Enabled || d.Kind != model.ScanDefinitionKindDiscovery {
+			continue
+		}
+		switch d.ScopeKind {
+		case model.ScanDefinitionScopeCIDR:
+			if d.CIDR != nil {
+				add(d.AgentID, strings.TrimSpace(*d.CIDR))
+			}
+		case model.ScanDefinitionScopeAgentAllowlist:
+			if d.AgentID == nil {
+				continue
+			}
+			snap, ok := snapCache[*d.AgentID]
+			if !ok {
+				snap, _ = h.store.GetAgentAllowlist(ctx, *d.AgentID)
+				snapCache[*d.AgentID] = snap
+			}
+			if snap == nil {
+				continue
+			}
+			for _, entry := range snap.Allow {
+				add(d.AgentID, strings.TrimSpace(entry))
+			}
+		}
+	}
+	return sources
 }
 
 // POST /api/v1/agents/bootstrap (public, rate-limited)
@@ -428,6 +641,8 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		// once on the agent's first allowlist snapshot.
 		AutoDiscoverPending: tok.AutoDiscover,
 		DiscoverCron:        tok.DiscoverCron,
+		// ADR 013 D10: copy the zone label from the token onto the agent.
+		Zone: tok.Zone,
 	})
 	if err != nil {
 		slog.Error("bootstrap: creating agent", "error", err)

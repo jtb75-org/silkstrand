@@ -379,6 +379,7 @@ type CreateInstallTokenInput struct {
 	CreatedBy    string
 	AutoDiscover bool
 	DiscoverCron *string
+	Zone         *string // ADR 013 D10: normalized zone slug (nil if unset)
 }
 
 // ConsumedInstallToken is the record returned when an install token is
@@ -388,6 +389,7 @@ type ConsumedInstallToken struct {
 	TenantID     string
 	AutoDiscover bool
 	DiscoverCron *string
+	Zone         *string // ADR 013 D10
 }
 
 // CreateCredentialMappingInput carries the three-way scope for a new

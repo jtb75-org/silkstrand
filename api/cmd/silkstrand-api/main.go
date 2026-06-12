@@ -221,6 +221,7 @@ func run() error {
 	apiMux.HandleFunc("POST /api/v1/agents/{id}/upgrade", agentsH.Upgrade)
 	apiMux.HandleFunc("DELETE /api/v1/agents/{id}", agentsH.Delete)
 	apiMux.HandleFunc("POST /api/v1/agents/install-tokens", agentsH.CreateInstallToken)
+	apiMux.HandleFunc("POST /api/v1/agents/allowlist-preview", agentsH.AllowlistPreview)
 
 	// Scans (ad-hoc debug path; scan_definitions is the durable surface)
 	apiMux.HandleFunc("POST /api/v1/scans", scanH.Create)

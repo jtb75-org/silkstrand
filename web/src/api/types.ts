@@ -292,6 +292,7 @@ export interface Agent {
   id: string;
   tenant_id: string;
   name: string;
+  zone?: string | null; // ADR 013 D10: site label
   status: 'pending' | 'connected' | 'disconnected' | 'online' | 'offline';
   last_heartbeat?: string;
   version?: string;

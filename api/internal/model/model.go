@@ -53,6 +53,7 @@ type Agent struct {
 	ID            string     `json:"id"`
 	TenantID      string     `json:"tenant_id"`
 	Name          string     `json:"name"`
+	Zone          *string    `json:"zone,omitempty"` // ADR 013 D10: site label for overlap heuristic
 	Status        string     `json:"status"`
 	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty"`
 	Version       *string    `json:"version,omitempty"`
@@ -70,6 +71,8 @@ type CreateAgentRequest struct {
 	// bootstrap; consumed (fire-once) on the agent's first allowlist snapshot.
 	AutoDiscoverPending bool    `json:"-"`
 	DiscoverCron        *string `json:"-"`
+	// ADR 013 D10: normalized zone slug copied from the install token.
+	Zone *string `json:"-"`
 }
 
 // AgentLogEvent is a persisted agent log line. Partition key is occurred_at.
