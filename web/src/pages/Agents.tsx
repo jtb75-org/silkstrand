@@ -10,6 +10,12 @@ import type { Agent, AgentDownloads, Scan } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import AgentLogConsole from '../components/AgentLogConsole';
 
+// Single-quote a user-supplied value so it is safe to paste into a shell: an
+// allow-target can be a wildcard hostname (*.example.com) which would otherwise
+// glob, and free-form input must never be interpreted (spaces, ;, `, etc.).
+// Closes the quote, emits an escaped ', reopens — the standard POSIX idiom.
+const shQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+
 export default function Agents() {
   const qc = useQueryClient();
   const { active } = useAuth();
@@ -99,7 +105,7 @@ export default function Agents() {
         `--token=${installToken.token}`,
         `--api-url=${apiURL}`,
         `--name=$(hostname)`,
-        ...cleanAllow.map((c) => `--allow-cidr=${c}`),
+        ...cleanAllow.map((c) => `--allow-cidr=${shQuote(c)}`),
         `--as-service`,
       ].join(' \\\n  ')}`
     : '';
