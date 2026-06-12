@@ -57,7 +57,7 @@ type Agent struct {
 	Status        string     `json:"status"`
 	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty"`
 	Version       *string    `json:"version,omitempty"`
-	InContainer   bool       `json:"in_container"` // ADR 013 follow-up: upgrade is image-recreate, not in-place
+	InContainer   *bool      `json:"in_container"` // ADR 013 follow-up: nil = unknown; true = container (image-recreate); false = binary (in-place)
 	KeyHash       string     `json:"-"`
 	NextKeyHash   *string    `json:"-"`
 	KeyRotatedAt  *time.Time `json:"key_rotated_at,omitempty"`

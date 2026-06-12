@@ -473,10 +473,14 @@ func (s *PostgresStore) UpdateAgentStatus(ctx context.Context, id, status string
 	return nil
 }
 
-func (s *PostgresStore) UpdateAgentHeartbeat(ctx context.Context, id, version string, inContainer bool) error {
+// UpdateAgentHeartbeat refreshes status/heartbeat and, when reported, version
+// and in_container. inContainer is nil for agents predating the field —
+// COALESCE leaves the stored value untouched (stays NULL = unknown) rather than
+// overwriting it with a false the agent never sent (ADR 013 follow-up).
+func (s *PostgresStore) UpdateAgentHeartbeat(ctx context.Context, id, version string, inContainer *bool) error {
 	if version == "" {
 		_, err := s.db.ExecContext(ctx,
-			`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), in_container = $1 WHERE id = $2`,
+			`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), in_container = COALESCE($1, in_container) WHERE id = $2`,
 			inContainer, id)
 		if err != nil {
 			return fmt.Errorf("updating agent heartbeat: %w", err)
@@ -484,7 +488,7 @@ func (s *PostgresStore) UpdateAgentHeartbeat(ctx context.Context, id, version st
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), version = $1, in_container = $2 WHERE id = $3`,
+		`UPDATE agents SET status = 'connected', last_heartbeat = NOW(), version = $1, in_container = COALESCE($2, in_container) WHERE id = $3`,
 		version, inContainer, id)
 	if err != nil {
 		return fmt.Errorf("updating agent heartbeat: %w", err)
