@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,7 @@ type Config struct {
 	PoliciesDir             string   // Path to builtin policies/ directory for copy-from-builtin
 	PolicyDir               string   // Directory containing Rego policy files (ADR 011 D10)
 	AuditEventsEnabled      bool     // ADR 005: enable audit event persistence (default true)
+	DiscoveryChunkIPs       int      // IPs per discovery chunk; 0 = scheduler default (1024). DISCOVERY_CHUNK_IPS
 }
 
 func Load() (*Config, error) {
@@ -54,6 +56,7 @@ func Load() (*Config, error) {
 		PoliciesDir:             getEnv("POLICIES_DIR", "./policies"),
 		PolicyDir:               getEnv("POLICY_DIR", "./policies"),
 		AuditEventsEnabled:      auditEnabled,
+		DiscoveryChunkIPs:       getEnvInt("DISCOVERY_CHUNK_IPS", 0),
 	}
 
 	if getEnv("ENV", "dev") == "production" {
@@ -85,6 +88,15 @@ func parseOrigins(s string) []string {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

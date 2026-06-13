@@ -30,6 +30,10 @@ type Dispatcher struct {
 	Store  store.Store
 	PubSub DirectivePublisher
 	Bus    events.Bus
+	// ChunkIPs overrides the discovery chunk size (IPs per chunk). 0 falls
+	// back to DefaultDiscoveryChunkIPs. Sourced from DISCOVERY_CHUNK_IPS —
+	// lower it (e.g. 64) to exercise multi-chunk/resume on a small LAN.
+	ChunkIPs int
 }
 
 type DirectivePublisher interface {
@@ -51,9 +55,9 @@ type discoveryTarget struct {
 }
 
 // New builds a Scheduler with a default 30s tick per ADR 007 D4.
-func New(s store.Store, ps *pubsub.PubSub, bus events.Bus) *Scheduler {
+func New(s store.Store, ps *pubsub.PubSub, bus events.Bus, chunkIPs int) *Scheduler {
 	return &Scheduler{
-		D:        Dispatcher{Store: s, PubSub: ps, Bus: bus},
+		D:        Dispatcher{Store: s, PubSub: ps, Bus: bus, ChunkIPs: chunkIPs},
 		Interval: 30 * time.Second,
 	}
 }
@@ -420,7 +424,7 @@ func (d Dispatcher) dispatchChunkedDiscovery(ctx context.Context, def model.Scan
 	}
 	chunks := make([]store.CreateScanChunkInput, 0, len(targets))
 	for _, target := range targets {
-		pieces, err := splitDiscoveryTarget(sc.ID, def.TenantID, def.AgentID, target.targetType, target.targetIdentifier, DefaultDiscoveryChunkIPs)
+		pieces, err := splitDiscoveryTarget(sc.ID, def.TenantID, def.AgentID, target.targetType, target.targetIdentifier, d.ChunkIPs)
 		if err != nil {
 			_ = d.Store.FailScan(ctx, sc.ID, err.Error())
 			return fmt.Errorf("splitting discovery target %q: %w", target.targetIdentifier, err)
