@@ -305,6 +305,39 @@ func TestExecuteAgentAllowlistScope(t *testing.T) {
 	}
 }
 
+// TestExecuteChunkSizeOverride verifies Dispatcher.ChunkIPs (from
+// DISCOVERY_CHUNK_IPS) threads through to the splitter: a /24 (256 IPs) is a
+// single chunk at the default 1024, but splits into 4 chunks at 64 IPs/chunk.
+func TestExecuteChunkSizeOverride(t *testing.T) {
+	cidr := "192.168.0.0/24"
+	agent := "agent-1"
+	def := model.ScanDefinition{
+		ID:        "def-cidr-chunked",
+		TenantID:  "t-1",
+		Kind:      model.ScanDefinitionKindDiscovery,
+		ScopeKind: model.ScanDefinitionScopeCIDR,
+		CIDR:      &cidr,
+		AgentID:   &agent,
+		Enabled:   true,
+	}
+	// Default (ChunkIPs=0 -> 1024): a /24 is one chunk.
+	f0 := &fakeStore{}
+	if err := (Dispatcher{Store: f0}).Execute(context.Background(), def); err != nil {
+		t.Fatalf("Execute (default): %v", err)
+	}
+	if len(f0.chunks) != 1 {
+		t.Fatalf("default chunk size: got %d chunks want 1", len(f0.chunks))
+	}
+	// Override to 64 IPs/chunk: 256/64 = 4 chunks.
+	f := &fakeStore{}
+	if err := (Dispatcher{Store: f, ChunkIPs: 64}).Execute(context.Background(), def); err != nil {
+		t.Fatalf("Execute (override): %v", err)
+	}
+	if len(f.chunks) != 4 {
+		t.Fatalf("ChunkIPs=64 on /24: got %d chunks want 4", len(f.chunks))
+	}
+}
+
 func TestExecuteDNSListScope(t *testing.T) {
 	agent := "agent-1"
 	def := model.ScanDefinition{

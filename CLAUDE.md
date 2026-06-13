@@ -575,6 +575,7 @@ curl -s localhost:8080/api/v1/scans/<scan_id> -H "Authorization: Bearer $TOKEN" 
 | `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing key. In-cluster: from OpenBao `secret/silkstrand/shared/tenant-jwt` via ESO. |
 | `INTERNAL_API_KEY` | (none) | API key for backoffice access. In-cluster: OpenBao `secret/silkstrand/dc/<region>/internal-api-key` via ESO. |
 | `CREDENTIAL_ENCRYPTION_KEY` | (none) | 64 hex chars (32 bytes) for AES-256-GCM. In-cluster: OpenBao `secret/silkstrand/dc/<region>/credential-encryption-key` via ESO. |
+| `DISCOVERY_CHUNK_IPS` | (unset → `1024`) | IPs per discovery chunk (server-side chunked discovery, migration 035). Lower it (e.g. `64`) to exercise multi-chunk/resume on a small LAN; a `/24` becomes 4 chunks at 64. |
 
 ### Backoffice API
 

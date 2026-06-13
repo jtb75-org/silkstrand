@@ -93,7 +93,7 @@ func run() error {
 	// that need to publish (agent WSS → scan_progress, agent_log, scan_status)
 	// and to the events handler that exposes the SSE subscriber endpoint.
 	eventBus := events.NewMemoryBus()
-	sched := scheduler.New(pgStore, ps, eventBus)
+	sched := scheduler.New(pgStore, ps, eventBus, cfg.DiscoveryChunkIPs)
 	hub.OnMessage = buildOnMessage(pgStore, ps, notifier, sched.D, eventBus, auditW)
 
 	// Scheduler goroutine (ADR 007 D4). Started before routes are served
