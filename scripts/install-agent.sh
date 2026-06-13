@@ -241,8 +241,9 @@ ensure_recon_deps() {
     fi
     log "Installing libpcap (required by the naabu recon tool)"
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq >/dev/null 2>&1
-        apt-get install -y -qq libpcap0.8 >/dev/null 2>&1 && return 0
+        # Chained so a transient apt update/lock failure falls through to the
+        # warning rather than exiting under `set -e` (it must warn, not fail).
+        apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq libpcap0.8 >/dev/null 2>&1 && return 0
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y -q libpcap >/dev/null 2>&1 && return 0
     elif command -v yum >/dev/null 2>&1; then
