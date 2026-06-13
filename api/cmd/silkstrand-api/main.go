@@ -106,7 +106,7 @@ func run() error {
 	healthH := handler.NewHealthHandler(pgStore, redisPingFunc(ps))
 	targetH := handler.NewTargetHandler(pgStore)
 	scanH := handler.NewScanHandler(pgStore, ps, hub, eventBus)
-	agentH := handler.NewAgentHandler(hub, pgStore, ps, cfg.CredentialEncryptionKey, eventBus, auditW)
+	agentH := handler.NewAgentHandler(hub, pgStore, ps, cfg.CredentialEncryptionKey, eventBus, auditW, sched.D)
 	agentsH := handler.NewAgentsHandler(pgStore, hub, ps, eventBus, auditW, cfg.AgentReleasesURL)
 	credsH := handler.NewCredentialsHandler(pgStore, cfg.CredentialEncryptionKey, auditW, ps)
 	probeH := handler.NewProbeHandler(pgStore, ps, cfg.CredentialEncryptionKey)
@@ -358,6 +358,11 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			if err := s.UpdateScanStatus(ctx, payload.ScanID, model.ScanStatusRunning); err != nil {
 				slog.Error("updating scan to running", "scan_id", payload.ScanID, "error", err)
 			}
+			if payload.ChunkID != "" {
+				if err := s.AckScanChunkStarted(ctx, payload.ChunkID); err != nil {
+					slog.Error("acknowledging discovery chunk start", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
+				}
+			}
 			if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
 				handler.PublishScanStatusFromScan(ctx, bus, scan)
 			}
@@ -371,6 +376,22 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			var payload websocket.ScanErrorPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				slog.Error("parsing scan_error payload", "agent_id", agentID, "error", err)
+				return
+			}
+			if payload.ChunkID != "" {
+				updated, err := s.FailScanChunk(ctx, payload.ChunkID, payload.Error)
+				if err != nil {
+					slog.Error("failing discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
+					return
+				}
+				if !updated {
+					slog.Warn("ignoring late discovery chunk failure", "agent_id", agentID, "scan_id", payload.ScanID, "chunk_id", payload.ChunkID)
+					return
+				}
+				if _, err := sched.DispatchNextChunk(ctx, agentID, payload.ScanID); err != nil {
+					slog.Error("dispatching next discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
+				}
+				slog.Warn("discovery chunk failed", "agent_id", agentID, "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", payload.Error)
 				return
 			}
 			if err := s.FailScan(ctx, payload.ScanID, payload.Error); err != nil {
@@ -437,6 +458,24 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			var payload websocket.DiscoveryCompletedPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				slog.Error("parsing discovery_completed payload", "agent_id", agentID, "error", err)
+				return
+			}
+			if payload.ChunkID != "" {
+				updated, err := s.CompleteScanChunk(ctx, payload.ChunkID, payload.AssetsFound, payload.HostsScanned)
+				if err != nil {
+					slog.Error("completing discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
+					return
+				}
+				if !updated {
+					slog.Warn("ignoring late discovery chunk completion", "agent_id", agentID, "scan_id", payload.ScanID, "chunk_id", payload.ChunkID)
+					return
+				}
+				if _, err := sched.DispatchNextChunk(ctx, agentID, payload.ScanID); err != nil {
+					slog.Error("dispatching next discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
+				}
+				slog.Info("discovery chunk completed", "agent_id", agentID, "scan_id", payload.ScanID,
+					"chunk_id", payload.ChunkID, "chunk_index", payload.ChunkIndex,
+					"assets_found", payload.AssetsFound, "hosts_scanned", payload.HostsScanned)
 				return
 			}
 			if err := s.UpdateScanStatus(ctx, payload.ScanID, model.ScanStatusCompleted); err != nil {
@@ -864,7 +903,7 @@ func runRuleActions(ctx context.Context, s store.Store, notifier *notify.Dispatc
 	for _, act := range fired {
 		auditW.Emit(ctx, audit.Event{
 			TenantID: act.TenantID, EventType: audit.EventRuleFired,
-			ActorType: audit.ActorSystem,
+			ActorType:    audit.ActorSystem,
 			ResourceType: "rule", ResourceID: act.RuleID,
 			Payload: map[string]any{
 				"rule_name": act.RuleName, "action": act.Type,

@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -123,19 +124,42 @@ func main() {
 
 	// Concurrency limiter: 1 scan at a time
 	scanSem := make(chan struct{}, 1)
+	var currentMu sync.Mutex
+	var currentScanID, currentChunkID string
 
 	// Wire up directive handler
 	tun.OnDirective = func(d tunnel.DirectivePayload) {
 		select {
 		case scanSem <- struct{}{}:
+			currentMu.Lock()
+			currentScanID, currentChunkID = d.ScanID, d.ChunkID
+			currentMu.Unlock()
 		default:
+			currentMu.Lock()
+			sameChunk := d.ChunkID != "" && d.ScanID == currentScanID && d.ChunkID == currentChunkID
+			currentMu.Unlock()
+			if sameChunk {
+				sendStartedPayload(tun, tunnel.ScanStartedPayload{ScanID: d.ScanID, ChunkID: d.ChunkID})
+				return
+			}
 			slog.Warn("scan rejected, already running", "scan_id", d.ScanID)
-			sendError(tun, d.ScanID, "agent busy: another scan is in progress")
+			sendScanError(tun, tunnel.ScanErrorPayload{
+				ScanID:  d.ScanID,
+				ChunkID: d.ChunkID,
+				Error:   "agent busy: another scan is in progress",
+			})
 			return
 		}
 
 		go func() {
-			defer func() { <-scanSem }()
+			defer func() {
+				currentMu.Lock()
+				if currentScanID == d.ScanID && currentChunkID == d.ChunkID {
+					currentScanID, currentChunkID = "", ""
+				}
+				currentMu.Unlock()
+				<-scanSem
+			}()
 			if d.ScanType == "discovery" {
 				handleDiscoveryDirective(tun, d)
 			} else {
@@ -437,7 +461,11 @@ func tryCollectorPath(ctx context.Context, tun *tunnel.Tunnel, d tunnel.Directiv
 }
 
 func sendStarted(tun *tunnel.Tunnel, scanID string) {
-	payload, _ := json.Marshal(tunnel.ScanStartedPayload{ScanID: scanID})
+	sendStartedPayload(tun, tunnel.ScanStartedPayload{ScanID: scanID})
+}
+
+func sendStartedPayload(tun *tunnel.Tunnel, p tunnel.ScanStartedPayload) {
+	payload, _ := json.Marshal(p)
 	tun.Send(tunnel.Message{Type: tunnel.TypeScanStarted, Payload: payload})
 }
 
@@ -472,7 +500,11 @@ func sendScanComplete(tun *tunnel.Tunnel, scanID string) {
 }
 
 func sendError(tun *tunnel.Tunnel, scanID, errMsg string) {
-	payload, _ := json.Marshal(tunnel.ScanErrorPayload{ScanID: scanID, Error: errMsg})
+	sendScanError(tun, tunnel.ScanErrorPayload{ScanID: scanID, Error: errMsg})
+}
+
+func sendScanError(tun *tunnel.Tunnel, p tunnel.ScanErrorPayload) {
+	payload, _ := json.Marshal(p)
 	tun.Send(tunnel.Message{Type: tunnel.TypeScanError, Payload: payload})
 }
 
@@ -576,6 +608,7 @@ func allowlistPath() string {
 func handleDiscoveryDirective(tun *tunnel.Tunnel, d tunnel.DirectivePayload) {
 	// Per-scan log scope — see ADR 008 D4.
 	ctx := logstream.WithScanID(context.Background(), d.ScanID)
+	sendStartedPayload(tun, tunnel.ScanStartedPayload{ScanID: d.ScanID, ChunkID: d.ChunkID})
 
 	slog.InfoContext(ctx, "received discovery directive",
 		"scan_id", d.ScanID,
@@ -595,12 +628,18 @@ func handleDiscoveryDirective(tun *tunnel.Tunnel, d tunnel.DirectivePayload) {
 	res, err := runner.ReconRun(ctx, d, emit)
 	if err != nil {
 		slog.ErrorContext(ctx, "discovery failed", "scan_id", d.ScanID, "error", err)
-		sendError(tun, d.ScanID, "discovery: "+err.Error())
+		sendScanError(tun, tunnel.ScanErrorPayload{
+			ScanID:  d.ScanID,
+			ChunkID: d.ChunkID,
+			Error:   "discovery: " + err.Error(),
+		})
 		return
 	}
 
 	completed, _ := json.Marshal(tunnel.DiscoveryCompletedPayload{
 		ScanID:       d.ScanID,
+		ChunkID:      d.ChunkID,
+		ChunkIndex:   d.ChunkIndex,
 		AssetsFound:  res.AssetsFound,
 		HostsScanned: res.HostsScanned,
 	})

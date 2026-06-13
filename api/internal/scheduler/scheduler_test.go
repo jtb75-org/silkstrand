@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jtb75/silkstrand/api/internal/model"
+	"github.com/jtb75/silkstrand/api/internal/pubsub"
 	"github.com/jtb75/silkstrand/api/internal/store"
 )
 
@@ -24,6 +25,33 @@ type fakeStore struct {
 	createInputs  []store.CreateScanForDefinitionInput
 	allowlistSnap *store.AgentAllowlistSnapshot
 	httpNames     []string
+	chunks        []store.CreateScanChunkInput
+	resetScanIDs  []string
+	scans         map[string]*model.Scan
+	summaries     []*store.ScanChunkSummary
+	claims        []*model.ScanChunk
+	statusUpdates []scanStatusUpdate
+	resetChunks   []string
+	parents       []store.ChunkedParent
+	unackedResets []string
+}
+
+type scanStatusUpdate struct {
+	scanID string
+	status string
+}
+
+type fakePublisher struct {
+	directives []pubsub.Directive
+	err        error
+}
+
+func (p *fakePublisher) PublishDirective(ctx context.Context, agentID string, directive pubsub.Directive) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.directives = append(p.directives, directive)
+	return nil
 }
 
 func (f *fakeStore) GetAgentAllowlist(ctx context.Context, agentID string) (*store.AgentAllowlistSnapshot, error) {
@@ -90,11 +118,35 @@ func (f *fakeStore) AgentHasRunningScanExcluding(ctx context.Context, agentID, e
 }
 
 func (f *fakeStore) UpdateScanStatus(ctx context.Context, scanID, status string) error {
+	f.statusUpdates = append(f.statusUpdates, scanStatusUpdate{scanID: scanID, status: status})
+	return nil
+}
+
+func (f *fakeStore) CreateScanChunks(ctx context.Context, chunks []store.CreateScanChunkInput) error {
+	f.chunks = append(f.chunks, chunks...)
 	return nil
 }
 
 func (f *fakeStore) FailStaleQueuedScans(ctx context.Context, maxAge time.Duration) (int, error) {
 	return 0, nil
+}
+
+func (f *fakeStore) ResetStaleRunningScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ResetUnackedScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	return f.unackedResets, nil
+}
+
+func (f *fakeStore) FailAbandonedChunkedScans(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeStore) ActiveChunkedParentsWithoutRunningChunk(ctx context.Context, limit int) ([]store.ChunkedParent, error) {
+	out := f.parents
+	f.parents = nil
+	return out, nil
 }
 
 func (f *fakeStore) DeleteOldAgentLogs(ctx context.Context, maxAge time.Duration) (int, error) {
@@ -107,6 +159,52 @@ func (f *fakeStore) DeleteOldCollectedFacts(ctx context.Context, maxAge time.Dur
 
 func (f *fakeStore) OldestQueuedScanForAgent(ctx context.Context, agentID string) (*model.Scan, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ResetRunningScanChunksForAgent(ctx context.Context, agentID string) ([]string, error) {
+	return f.resetScanIDs, nil
+}
+
+func (f *fakeStore) ScanChunkSummary(ctx context.Context, scanID string) (*store.ScanChunkSummary, error) {
+	if len(f.summaries) == 0 {
+		return &store.ScanChunkSummary{}, nil
+	}
+	next := f.summaries[0]
+	f.summaries = f.summaries[1:]
+	return next, nil
+}
+
+func (f *fakeStore) ClaimNextScanChunk(ctx context.Context, scanID, agentID string) (*model.ScanChunk, error) {
+	if len(f.claims) == 0 {
+		return nil, nil
+	}
+	next := f.claims[0]
+	f.claims = f.claims[1:]
+	return next, nil
+}
+
+func (f *fakeStore) AckScanChunkStarted(ctx context.Context, chunkID string) error {
+	return nil
+}
+
+func (f *fakeStore) ResetScanChunkToPending(ctx context.Context, chunkID string) error {
+	f.resetChunks = append(f.resetChunks, chunkID)
+	return nil
+}
+
+func (f *fakeStore) CompleteScanChunk(ctx context.Context, chunkID string, assetsFound, hostsScanned int) (bool, error) {
+	return true, nil
+}
+
+func (f *fakeStore) FailScanChunk(ctx context.Context, chunkID, reason string) (bool, error) {
+	return true, nil
+}
+
+func (f *fakeStore) GetScanByID(ctx context.Context, id string) (*model.Scan, error) {
+	if f.scans == nil {
+		return nil, nil
+	}
+	return f.scans[id], nil
 }
 
 func (f *fakeStore) SetScanDefinitionLastRun(ctx context.Context, id string, at time.Time, status string) error {
@@ -185,21 +283,24 @@ func TestExecuteAgentAllowlistScope(t *testing.T) {
 	if err := d.Execute(context.Background(), def); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// 3 real entries → 3 target upserts + 3 scans (blank skipped).
-	if len(f.cidrUpserts) != 3 {
-		t.Fatalf("UpsertTargetByCIDR calls: got %d want 3", len(f.cidrUpserts))
+	// 3 real entries -> one parent scan with 3 chunks (blank skipped).
+	if len(f.cidrUpserts) != 0 {
+		t.Fatalf("UpsertTargetByCIDR calls: got %d want 0", len(f.cidrUpserts))
 	}
-	if f.createCalls != 3 {
-		t.Fatalf("CreateScanForDefinition calls: got %d want 3", f.createCalls)
+	if f.createCalls != 1 {
+		t.Fatalf("CreateScanForDefinition calls: got %d want 1", f.createCalls)
 	}
-	got := []string{f.cidrUpserts[0].CIDR, f.cidrUpserts[1].CIDR, f.cidrUpserts[2].CIDR}
+	if len(f.chunks) != 3 {
+		t.Fatalf("CreateScanChunks count: got %d want 3", len(f.chunks))
+	}
+	got := []string{f.chunks[0].TargetIdentifier, f.chunks[1].TargetIdentifier, f.chunks[2].TargetIdentifier}
 	want := []string{"10.0.0.0/24", "192.168.5.10", "host.example.com"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("entry %d: got %q want %q", i, got[i], want[i])
 		}
-		if f.cidrUpserts[i].AgentID == nil || *f.cidrUpserts[i].AgentID != agent {
-			t.Errorf("entry %d agent: got %v want %q", i, f.cidrUpserts[i].AgentID, agent)
+		if f.chunks[i].AgentID == nil || *f.chunks[i].AgentID != agent {
+			t.Errorf("entry %d agent: got %v want %q", i, f.chunks[i].AgentID, agent)
 		}
 	}
 }
@@ -219,17 +320,20 @@ func TestExecuteDNSListScope(t *testing.T) {
 	if err := d.Execute(context.Background(), def); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// One target upsert + one scan per imported name.
-	if len(f.cidrUpserts) != 2 || f.createCalls != 2 {
-		t.Fatalf("got upserts=%d createCalls=%d, want 2/2", len(f.cidrUpserts), f.createCalls)
+	// One parent scan with one chunk per imported name.
+	if len(f.cidrUpserts) != 0 || f.createCalls != 1 {
+		t.Fatalf("got upserts=%d createCalls=%d, want 0/1", len(f.cidrUpserts), f.createCalls)
+	}
+	if len(f.chunks) != 2 {
+		t.Fatalf("CreateScanChunks count: got %d want 2", len(f.chunks))
 	}
 	want := []string{"app.example.com", "api.example.com"}
 	for i, w := range want {
-		if f.cidrUpserts[i].CIDR != w {
-			t.Errorf("dispatch %d: got %q want %q", i, f.cidrUpserts[i].CIDR, w)
+		if f.chunks[i].TargetIdentifier != w {
+			t.Errorf("dispatch %d: got %q want %q", i, f.chunks[i].TargetIdentifier, w)
 		}
-		if f.cidrUpserts[i].AgentID == nil || *f.cidrUpserts[i].AgentID != agent {
-			t.Errorf("dispatch %d agent: got %v want %q", i, f.cidrUpserts[i].AgentID, agent)
+		if f.chunks[i].AgentID == nil || *f.chunks[i].AgentID != agent {
+			t.Errorf("dispatch %d agent: got %v want %q", i, f.chunks[i].AgentID, agent)
 		}
 	}
 }
@@ -249,6 +353,201 @@ func TestExecuteDNSListScopeBlocksOnEmpty(t *testing.T) {
 	}
 	if f.createCalls != 0 || len(f.cidrUpserts) != 0 {
 		t.Errorf("must not dispatch: createCalls=%d upserts=%d", f.createCalls, len(f.cidrUpserts))
+	}
+}
+
+func TestChunkedDiscoveryResumeFlow(t *testing.T) {
+	agent := "agent-1"
+	scanID := "scan-1"
+	chunkID := "chunk-2"
+	cases := []struct {
+		name string
+	}{
+		{"disconnect mid-chunk resets redispatches and parent completes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeStore{
+				resetScanIDs: []string{scanID},
+				scans: map[string]*model.Scan{
+					scanID: {
+						ID:       scanID,
+						TenantID: "tenant-1",
+						AgentID:  &agent,
+						BundleID: strPtr("bundle-discovery"),
+						ScanType: model.ScanTypeDiscovery,
+						Status:   model.ScanStatusRunning,
+					},
+				},
+				summaries: []*store.ScanChunkSummary{
+					{Total: 2, Pending: 1, Completed: 1},
+					{Total: 2, Completed: 2},
+				},
+				claims: []*model.ScanChunk{
+					{
+						ID:               chunkID,
+						ScanID:           scanID,
+						TenantID:         "tenant-1",
+						AgentID:          &agent,
+						ChunkIndex:       1,
+						TargetType:       model.TargetTypeCIDR,
+						TargetIdentifier: "10.0.4.0/22",
+					},
+					nil,
+				},
+			}
+			pub := &fakePublisher{}
+			d := Dispatcher{Store: f, PubSub: pub}
+
+			reset, err := f.ResetRunningScanChunksForAgent(context.Background(), agent)
+			if err != nil {
+				t.Fatalf("ResetRunningScanChunksForAgent: %v", err)
+			}
+			if len(reset) != 1 || reset[0] != scanID {
+				t.Fatalf("reset scan IDs = %v, want [%s]", reset, scanID)
+			}
+			published, err := d.DispatchNextChunk(context.Background(), agent, scanID)
+			if err != nil {
+				t.Fatalf("DispatchNextChunk after reset: %v", err)
+			}
+			if !published {
+				t.Fatal("DispatchNextChunk after reset did not publish")
+			}
+			if len(pub.directives) != 1 {
+				t.Fatalf("published directives = %d, want 1", len(pub.directives))
+			}
+			got := pub.directives[0]
+			if got.ScanID != scanID || got.ChunkID != chunkID || got.ChunkIndex != 1 || got.ChunkTotal != 2 {
+				t.Fatalf("directive chunk metadata = scan:%q chunk:%q idx:%d total:%d",
+					got.ScanID, got.ChunkID, got.ChunkIndex, got.ChunkTotal)
+			}
+			if got.TargetIdentifier != "10.0.4.0/22" {
+				t.Fatalf("directive target = %q, want 10.0.4.0/22", got.TargetIdentifier)
+			}
+
+			published, err = d.DispatchNextChunk(context.Background(), agent, scanID)
+			if err != nil {
+				t.Fatalf("DispatchNextChunk after completion: %v", err)
+			}
+			if published {
+				t.Fatal("DispatchNextChunk after all chunks complete unexpectedly published")
+			}
+			if len(f.statusUpdates) != 1 {
+				t.Fatalf("status updates = %d, want 1", len(f.statusUpdates))
+			}
+			if f.statusUpdates[0].scanID != scanID || f.statusUpdates[0].status != model.ScanStatusCompleted {
+				t.Fatalf("status update = %+v, want completed for %s", f.statusUpdates[0], scanID)
+			}
+		})
+	}
+}
+
+func TestDispatchNextChunkResetsClaimOnPublishError(t *testing.T) {
+	agent := "agent-1"
+	scanID := "scan-1"
+	chunkID := "chunk-1"
+	f := &fakeStore{
+		scans: map[string]*model.Scan{
+			scanID: {ID: scanID, TenantID: "tenant-1", AgentID: &agent, ScanType: model.ScanTypeDiscovery, Status: model.ScanStatusRunning},
+		},
+		summaries: []*store.ScanChunkSummary{{Total: 1, Pending: 1}},
+		claims: []*model.ScanChunk{{
+			ID:               chunkID,
+			ScanID:           scanID,
+			TenantID:         "tenant-1",
+			AgentID:          &agent,
+			TargetType:       model.TargetTypeCIDR,
+			TargetIdentifier: "10.0.0.0/24",
+		}},
+	}
+	d := Dispatcher{Store: f, PubSub: &fakePublisher{err: errors.New("publish down")}}
+	if _, err := d.DispatchNextChunk(context.Background(), agent, scanID); err == nil {
+		t.Fatal("DispatchNextChunk expected publish error, got nil")
+	}
+	if len(f.resetChunks) != 1 || f.resetChunks[0] != chunkID {
+		t.Fatalf("reset chunks = %v, want [%s]", f.resetChunks, chunkID)
+	}
+}
+
+func TestTickReconcilesActiveChunkedParentWithoutRunningChunk(t *testing.T) {
+	agent := "agent-1"
+	scanID := "scan-1"
+	chunkID := "chunk-2"
+	f := &fakeStore{
+		parents: []store.ChunkedParent{{ScanID: scanID, AgentID: agent}},
+		scans: map[string]*model.Scan{
+			scanID: {ID: scanID, TenantID: "tenant-1", AgentID: &agent, ScanType: model.ScanTypeDiscovery, Status: model.ScanStatusRunning},
+		},
+		summaries: []*store.ScanChunkSummary{{Total: 2, Pending: 1, Completed: 1}},
+		claims: []*model.ScanChunk{{
+			ID:               chunkID,
+			ScanID:           scanID,
+			TenantID:         "tenant-1",
+			AgentID:          &agent,
+			ChunkIndex:       1,
+			TargetType:       model.TargetTypeCIDR,
+			TargetIdentifier: "10.0.4.0/22",
+		}},
+	}
+	pub := &fakePublisher{}
+	s := &Scheduler{D: Dispatcher{Store: f, PubSub: pub}, Interval: time.Minute}
+	s.Tick(context.Background())
+	if len(pub.directives) != 1 {
+		t.Fatalf("published directives = %d, want 1", len(pub.directives))
+	}
+	if got := pub.directives[0]; got.ScanID != scanID || got.ChunkID != chunkID {
+		t.Fatalf("published directive = %+v, want scan %s chunk %s", got, scanID, chunkID)
+	}
+}
+
+func TestTickResetsUnackedChunksBeforeReconcile(t *testing.T) {
+	agent := "agent-1"
+	scanID := "scan-1"
+	chunkID := "chunk-1"
+	f := &fakeStore{
+		unackedResets: []string{scanID},
+		parents:       []store.ChunkedParent{{ScanID: scanID, AgentID: agent}},
+		scans: map[string]*model.Scan{
+			scanID: {ID: scanID, TenantID: "tenant-1", AgentID: &agent, ScanType: model.ScanTypeDiscovery, Status: model.ScanStatusRunning},
+		},
+		summaries: []*store.ScanChunkSummary{{Total: 1, Pending: 1}},
+		claims: []*model.ScanChunk{{
+			ID:               chunkID,
+			ScanID:           scanID,
+			TenantID:         "tenant-1",
+			AgentID:          &agent,
+			TargetType:       model.TargetTypeCIDR,
+			TargetIdentifier: "10.0.0.0/24",
+		}},
+	}
+	pub := &fakePublisher{}
+	s := &Scheduler{D: Dispatcher{Store: f, PubSub: pub}, Interval: time.Minute}
+	s.Tick(context.Background())
+	if len(pub.directives) != 1 || pub.directives[0].ChunkID != chunkID {
+		t.Fatalf("published directives = %+v, want chunk %s", pub.directives, chunkID)
+	}
+}
+
+func TestDispatchNextChunkDoesNotTerminalizeFailedParent(t *testing.T) {
+	agent := "agent-1"
+	scanID := "scan-1"
+	f := &fakeStore{
+		scans: map[string]*model.Scan{
+			scanID: {ID: scanID, TenantID: "tenant-1", AgentID: &agent, ScanType: model.ScanTypeDiscovery, Status: model.ScanStatusFailed},
+		},
+		summaries: []*store.ScanChunkSummary{{Total: 1, Completed: 1}},
+		claims:    []*model.ScanChunk{nil},
+	}
+	d := Dispatcher{Store: f, PubSub: &fakePublisher{}}
+	published, err := d.DispatchNextChunk(context.Background(), agent, scanID)
+	if err != nil {
+		t.Fatalf("DispatchNextChunk: %v", err)
+	}
+	if published {
+		t.Fatal("DispatchNextChunk unexpectedly published")
+	}
+	if len(f.statusUpdates) != 0 {
+		t.Fatalf("status updates = %+v, want none", f.statusUpdates)
 	}
 }
 
@@ -381,4 +680,8 @@ func TestExecuteCIDRScopeMissingAgent(t *testing.T) {
 	if len(f.cidrUpserts) != 0 {
 		t.Errorf("UpsertTargetByCIDR should not be called; got %d", len(f.cidrUpserts))
 	}
+}
+
+func strPtr(s string) *string {
+	return &s
 }

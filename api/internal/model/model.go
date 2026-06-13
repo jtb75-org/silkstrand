@@ -397,11 +397,42 @@ const (
 	ScanTypeCompliance = "compliance"
 	ScanTypeDiscovery  = "discovery"
 
+	ScanChunkStatusPending   = "pending"
+	ScanChunkStatusRunning   = "running"
+	ScanChunkStatusCompleted = "completed"
+	ScanChunkStatusFailed    = "failed"
+
 	// DiscoveryBundleID is the well-known UUID for the global discovery
 	// bundle seeded by migration 015. Discovery scans reference it so
 	// the scan row always has a valid bundle_id FK.
 	DiscoveryBundleID = "11111111-1111-1111-1111-111111111111"
 )
+
+// ScanChunk is a durable checkpoint unit for large discovery scans. A chunk
+// runs the full recon pipeline against TargetIdentifier, then commits at the
+// chunk boundary so reconnects can resume from the first incomplete chunk.
+type ScanChunk struct {
+	ID               string     `json:"id"`
+	ScanID           string     `json:"scan_id"`
+	TenantID         string     `json:"tenant_id"`
+	AgentID          *string    `json:"agent_id,omitempty"`
+	ChunkIndex       int        `json:"chunk_index"`
+	TargetType       string     `json:"target_type"`
+	TargetIdentifier string     `json:"target_identifier"`
+	IPStart          *string    `json:"ip_start,omitempty"`
+	IPEnd            *string    `json:"ip_end,omitempty"`
+	IPCount          int        `json:"ip_count"`
+	Status           string     `json:"status"`
+	Attempts         int        `json:"attempts"`
+	AssetsFound      int        `json:"assets_found"`
+	HostsScanned     int        `json:"hosts_scanned"`
+	ErrorMessage     *string    `json:"error_message,omitempty"`
+	DispatchedAt     *time.Time `json:"dispatched_at,omitempty"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
 
 type CreateScanRequest struct {
 	TargetID string `json:"target_id,omitempty"`
