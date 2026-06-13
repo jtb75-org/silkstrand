@@ -464,8 +464,11 @@ func (s *PostgresStore) CreateScanChunks(ctx context.Context, chunks []CreateSca
 func (s *PostgresStore) ClaimNextScanChunk(ctx context.Context, scanID, agentID string) (*model.ScanChunk, error) {
 	var c model.ScanChunk
 	err := scanScanChunk(&c, s.db.QueryRowContext(ctx,
+		// next.chunk_id is aliased (not bare `id`) so the RETURNING below —
+		// which selects sc.id via scanChunkCols — isn't ambiguous between
+		// scan_chunks and the CTE (both have an `id` column).
 		`WITH next AS (
-		    SELECT id
+		    SELECT id AS chunk_id
 		      FROM scan_chunks
 		     WHERE scan_id = $1
 		       AND agent_id = $2
@@ -481,7 +484,7 @@ func (s *PostgresStore) ClaimNextScanChunk(ctx context.Context, scanID, agentID 
 		        completed_at = NULL,
 		        updated_at = NOW()
 		   FROM next
-		  WHERE sc.id = next.id
+		  WHERE sc.id = next.chunk_id
 		 RETURNING `+scanChunkCols,
 		scanID, agentID, model.ScanChunkStatusPending, model.ScanChunkStatusFailed,
 		model.ScanChunkStatusRunning))
