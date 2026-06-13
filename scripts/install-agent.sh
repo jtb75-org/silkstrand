@@ -230,6 +230,29 @@ download_binary() {
     log "Downloaded silkstrand-agent → $INSTALL_DIR/silkstrand-agent"
 }
 
+# Ensure libpcap is present — the recon tool naabu links against it and exits
+# 127 ("libpcap.so.0.8: cannot open shared object file") without it. The docker
+# image bundles it; a binary install onto a minimal OS does not. Best-effort
+# across the common package managers; warns (does not fail) if it can't.
+ensure_recon_deps() {
+    [ "$(detect_os)" = "linux" ] || return 0
+    if ldconfig -p 2>/dev/null | grep -q 'libpcap\.so'; then
+        return 0
+    fi
+    log "Installing libpcap (required by the naabu recon tool)"
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq >/dev/null 2>&1
+        apt-get install -y -qq libpcap0.8 >/dev/null 2>&1 && return 0
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y -q libpcap >/dev/null 2>&1 && return 0
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y -q libpcap >/dev/null 2>&1 && return 0
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache libpcap >/dev/null 2>&1 && return 0
+    fi
+    log "WARNING: could not auto-install libpcap — discovery will fail until you install it (e.g. 'apt install libpcap0.8' / 'yum install libpcap')"
+}
+
 # Exchange the install token for agent credentials. Sets the shell vars
 # AGENT_ID, API_KEY, and WS_URL. Works the same for binary and docker
 # modes — only the target of the credentials differs afterward.
@@ -285,6 +308,10 @@ SILKSTRAND_AGENT_ID=$AGENT_ID
 SILKSTRAND_AGENT_KEY=$API_KEY
 SILKSTRAND_API_URL=$WS_URL
 SILKSTRAND_BUNDLE_DIR=$BUNDLE_DIR
+# Connect-scan by default: works unprivileged and over NAT, where a naabu SYN
+# scan (raw sockets) silently finds nothing. On a privileged host with a real
+# NIC, set SILKSTRAND_NAABU_SCAN_TYPE=s for faster SYN scanning.
+SILKSTRAND_NAABU_SCAN_TYPE=c
 EOF
     # ADR 013 D3: persist egress proxy + custom CA so the running agent honors
     # the same network policy as the install fetch. Paths/URLs only — no
@@ -893,6 +920,7 @@ main() {
     trap cleanup_partial_install EXIT
 
     download_binary
+    ensure_recon_deps
     if [ -n "$TOKEN" ] || [ -n "$API_URL" ]; then
         bootstrap_agent_binary
         render_allowlist "$ALLOWLIST_FILE"

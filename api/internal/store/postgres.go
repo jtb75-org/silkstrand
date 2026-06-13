@@ -574,7 +574,22 @@ func (s *PostgresStore) DeleteAgent(ctx context.Context, id string) error {
 	if tenantID == "" {
 		return fmt.Errorf("tenant not set in context")
 	}
-	result, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("deleting agent: %w", err)
+	}
+	defer tx.Rollback()
+	// agent_allowlist / dns_list definitions REQUIRE agent_id (scope CHECK), so
+	// the FK's ON DELETE SET NULL would violate it. They're meaningless without
+	// the agent — drop them first (issue #374). Other scopes that merely pin an
+	// agent are left to the FK's SET NULL.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM scan_definitions
+		   WHERE agent_id = $1 AND tenant_id = $2
+		     AND scope_kind IN ('agent_allowlist', 'dns_list')`, id, tenantID); err != nil {
+		return fmt.Errorf("deleting agent scan definitions: %w", err)
+	}
+	result, err := tx.ExecContext(ctx,
 		`DELETE FROM agents WHERE id = $1 AND tenant_id = $2`, id, tenantID)
 	if err != nil {
 		return fmt.Errorf("deleting agent: %w", err)
@@ -583,7 +598,7 @@ func (s *PostgresStore) DeleteAgent(ctx context.Context, id string) error {
 	if rows == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ======================================================================
