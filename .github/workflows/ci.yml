@@ -59,6 +59,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: needs.changes.outputs.go == 'true'
+    # Postgres for the store-layer integration tests (TEST_DATABASE_URL-gated).
+    # They self-apply migrations from the embedded FS, so an empty DB is fine.
+    # Real-SQL coverage that the scheduler's fakeStore can't provide.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: silkstrand
+          POSTGRES_PASSWORD: localdev
+          POSTGRES_DB: silkstrand
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U silkstrand"
+          --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v6
 
@@ -82,6 +97,8 @@ jobs:
           working-directory: api
 
       - name: Test API
+        env:
+          TEST_DATABASE_URL: postgres://silkstrand:localdev@localhost:5432/silkstrand?sslmode=disable
         run: cd api && go test ./... -v -race -coverprofile=coverage.out
 
   collectors-go:
