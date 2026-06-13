@@ -40,13 +40,18 @@ func (ps *PubSub) Ping(ctx context.Context) error {
 
 // Directive is a scan directive sent to an agent.
 type Directive struct {
-	ScanID          string `json:"scan_id"`
-	ScanType        string `json:"scan_type,omitempty"` // empty == "compliance" (back-compat)
-	BundleID        string `json:"bundle_id"`
-	BundleVersion   string `json:"bundle_version,omitempty"`
-	TargetID        string `json:"target_id"`
-	AssetEndpointID string `json:"asset_endpoint_id,omitempty"` // set for collection/endpoint-scoped scans
-	TenantID        string `json:"tenant_id,omitempty"`         // for credential resolution via mappings
+	ScanID           string `json:"scan_id"`
+	ScanType         string `json:"scan_type,omitempty"` // empty == "compliance" (back-compat)
+	BundleID         string `json:"bundle_id"`
+	BundleVersion    string `json:"bundle_version,omitempty"`
+	TargetID         string `json:"target_id"`
+	AssetEndpointID  string `json:"asset_endpoint_id,omitempty"` // set for collection/endpoint-scoped scans
+	TenantID         string `json:"tenant_id,omitempty"`         // for credential resolution via mappings
+	ChunkID          string `json:"chunk_id,omitempty"`
+	ChunkIndex       int    `json:"chunk_index,omitempty"`
+	ChunkTotal       int    `json:"chunk_total,omitempty"`
+	TargetType       string `json:"target_type,omitempty"`
+	TargetIdentifier string `json:"target_identifier,omitempty"`
 }
 
 // PublishDirective sends a scan directive to a specific agent's channel.
@@ -68,9 +73,22 @@ func (ps *PubSub) PublishDirective(ctx context.Context, agentID string, directiv
 // SubscribeDirectives subscribes to directives for a specific agent.
 // The callback is invoked for each directive received.
 func (ps *PubSub) SubscribeDirectives(ctx context.Context, agentID string, callback func(Directive)) error {
+	return ps.SubscribeDirectivesReady(ctx, agentID, nil, callback)
+}
+
+func (ps *PubSub) SubscribeDirectivesReady(ctx context.Context, agentID string, ready chan<- struct{}, callback func(Directive)) error {
 	channel := fmt.Sprintf("agent:%s:directives", agentID)
 	sub := ps.client.Subscribe(ctx, channel)
 	defer sub.Close()
+	if _, err := sub.Receive(ctx); err != nil {
+		if ready != nil {
+			close(ready)
+		}
+		return fmt.Errorf("registering directive subscription: %w", err)
+	}
+	if ready != nil {
+		close(ready)
+	}
 
 	ch := sub.Channel()
 	for {

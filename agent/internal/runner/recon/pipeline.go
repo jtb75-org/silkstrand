@@ -55,6 +55,8 @@ type DiscoveryConfig struct {
 // PipelineRequest packages everything the recon runner needs.
 type PipelineRequest struct {
 	ScanID           string
+	ChunkID          string
+	ChunkIndex       int
 	TargetIdentifier string          // CIDR, IP, range, or hostname
 	TargetConfig     json.RawMessage // DiscoveryConfig
 	Emit             EmitFunc
@@ -91,7 +93,7 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	pps := allow.EffectivePPS(cfg.RatePPS)
 
 	// Stage 1: naabu.
-	naabuBatcher := NewBatcher(req.ScanID, "naabu", req.Emit, cfg.BatchSize, 2*time.Second)
+	naabuBatcher := NewBatcher(req.ScanID, "naabu", req.Emit, cfg.BatchSize, 2*time.Second).WithChunk(req.ChunkID, req.ChunkIndex)
 	defer naabuBatcher.Stop()
 
 	var (
@@ -134,7 +136,7 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	}
 
 	// Stage 2: httpx (HTTP/TLS fingerprint over naabu's findings).
-	httpxBatcher := NewBatcher(req.ScanID, "httpx", req.Emit, cfg.BatchSize, 2*time.Second)
+	httpxBatcher := NewBatcher(req.ScanID, "httpx", req.Emit, cfg.BatchSize, 2*time.Second).WithChunk(req.ChunkID, req.ChunkIndex)
 	defer httpxBatcher.Stop()
 
 	// When the directive targets a hostname, probe each open port BY NAME so
@@ -201,7 +203,7 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	// Stage 3: nuclei (CVE templates against httpx URLs). After this
 	// stage we flush per-asset (batch size 1) because CVE results are
 	// the high-value-but-late slice.
-	nucleiBatcher := NewBatcher(req.ScanID, "nuclei", req.Emit, 1, 1*time.Second)
+	nucleiBatcher := NewBatcher(req.ScanID, "nuclei", req.Emit, 1, 1*time.Second).WithChunk(req.ChunkID, req.ChunkIndex)
 	defer nucleiBatcher.Stop()
 
 	cveByEndpoint := map[string][]map[string]any{}

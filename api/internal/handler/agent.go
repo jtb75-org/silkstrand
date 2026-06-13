@@ -19,6 +19,7 @@ import (
 	"github.com/jtb75/silkstrand/api/internal/events"
 	"github.com/jtb75/silkstrand/api/internal/model"
 	"github.com/jtb75/silkstrand/api/internal/pubsub"
+	"github.com/jtb75/silkstrand/api/internal/scheduler"
 	"github.com/jtb75/silkstrand/api/internal/store"
 	"github.com/jtb75/silkstrand/api/internal/websocket"
 )
@@ -32,10 +33,11 @@ type AgentHandler struct {
 	credKey []byte
 	bus     events.Bus
 	audit   audit.Writer
+	sched   scheduler.Dispatcher
 }
 
-func NewAgentHandler(hub *websocket.Hub, s store.Store, ps *pubsub.PubSub, credKey []byte, bus events.Bus, aw audit.Writer) *AgentHandler {
-	return &AgentHandler{hub: hub, store: s, ps: ps, credKey: credKey, bus: bus, audit: aw}
+func NewAgentHandler(hub *websocket.Hub, s store.Store, ps *pubsub.PubSub, credKey []byte, bus events.Bus, aw audit.Writer, sched scheduler.Dispatcher) *AgentHandler {
+	return &AgentHandler{hub: hub, store: s, ps: ps, credKey: credKey, bus: bus, audit: aw, sched: sched}
 }
 
 // Connect handles the WebSocket upgrade for agent connections.
@@ -92,11 +94,14 @@ func (h *AgentHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
+	directivesReady := make(chan struct{})
 	if h.ps != nil {
-		go h.subscribeDirectives(ctx, agentID)
+		go h.subscribeDirectives(ctx, agentID, directivesReady)
 		go h.subscribeProbes(ctx, agentID)
 		go h.subscribeUpgrades(ctx, agentID)
 		go h.subscribeCredentialTests(ctx, agentID)
+	} else {
+		close(directivesReady)
 	}
 
 	// Update agent status to connected
@@ -109,9 +114,10 @@ func (h *AgentHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		ActorType: audit.ActorAgent, ActorID: agentID,
 		ResourceType: "agent", ResourceID: agentID,
 	})
-
 	// HandleConnection blocks until the agent disconnects
-	if err := h.hub.HandleConnection(w, r, agentID); err != nil {
+	if err := h.hub.HandleConnectionWithHook(w, r, agentID, func() {
+		h.ResumeChunkedScansWhenReady(ctx, agentID, directivesReady)
+	}); err != nil {
 		slog.Error("agent connection failed", "agent_id", agentID, "error", err)
 	}
 
@@ -135,6 +141,22 @@ func (h *AgentHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	slog.Info("agent disconnected", "agent_id", agentID)
 }
 
+func (h *AgentHandler) ResumeChunkedScans(ctx context.Context, agentID string) {
+	scanIDs, err := h.store.ResetRunningScanChunksForAgent(ctx, agentID)
+	if err != nil {
+		slog.Error("resetting running discovery chunks on reconnect", "agent_id", agentID, "error", err)
+		return
+	}
+	for _, scanID := range scanIDs {
+		if _, err := h.sched.DispatchNextChunk(ctx, agentID, scanID); err != nil {
+			slog.Error("resuming discovery scan on reconnect", "agent_id", agentID, "scan_id", scanID, "error", err)
+		}
+	}
+	if len(scanIDs) > 0 {
+		slog.Info("resumed chunked discovery scans", "agent_id", agentID, "scans", len(scanIDs))
+	}
+}
+
 // publishAgentStatus emits an agent_status event on the bus so SSE
 // subscribers (e.g. the tenant UI) can react to agent connect/disconnect/upgrade.
 func (h *AgentHandler) publishAgentStatus(tenantID, agentID, status string) {
@@ -154,8 +176,20 @@ func (h *AgentHandler) publishAgentStatus(tenantID, agentID, status string) {
 	}
 }
 
-func (h *AgentHandler) subscribeDirectives(ctx context.Context, agentID string) {
-	err := h.ps.SubscribeDirectives(ctx, agentID, func(d pubsub.Directive) {
+func (h *AgentHandler) ResumeChunkedScansWhenReady(ctx context.Context, agentID string, directivesReady <-chan struct{}) {
+	select {
+	case <-directivesReady:
+	case <-ctx.Done():
+		return
+	case <-time.After(5 * time.Second):
+		slog.Error("timed out waiting for directive subscription before resume", "agent_id", agentID)
+		return
+	}
+	h.ResumeChunkedScans(ctx, agentID)
+}
+
+func (h *AgentHandler) subscribeDirectives(ctx context.Context, agentID string, ready chan<- struct{}) {
+	err := h.ps.SubscribeDirectivesReady(ctx, agentID, ready, func(d pubsub.Directive) {
 		h.forwardDirective(ctx, agentID, d)
 	})
 	if err != nil && ctx.Err() == nil {
@@ -252,6 +286,9 @@ func (h *AgentHandler) forwardDirective(ctx context.Context, agentID string, d p
 		targetType = svc
 		targetIdentifier = ip + ":" + strconv.Itoa(ep.Port)
 		targetConfig, _ = json.Marshal(map[string]any{"port": ep.Port, "host": ip})
+	} else if d.TargetIdentifier != "" {
+		targetType = d.TargetType
+		targetIdentifier = d.TargetIdentifier
 	} else {
 		slog.Error("directive has no target or endpoint", "scan_id", d.ScanID)
 		return
@@ -285,8 +322,9 @@ func (h *AgentHandler) forwardDirective(ctx context.Context, agentID string, d p
 	if bundle.GCSPath != nil {
 		bundleURL = *bundle.GCSPath
 	}
-	msg := websocket.NewDirectiveMessage(
-		d.ScanID, scanType, d.BundleID, bundle.Name, bundle.Version, bundleURL,
+	msg := websocket.NewDirectiveMessageWithChunk(
+		d.ScanID, scanType, d.ChunkID, d.ChunkIndex, d.ChunkTotal,
+		d.BundleID, bundle.Name, bundle.Version, bundleURL,
 		targetID, targetType, targetIdentifier, targetConfig, creds, resolver,
 	)
 

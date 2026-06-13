@@ -16,11 +16,13 @@ type EmitFunc func(msgType string, payload any) error
 // for naabu/httpx; nuclei results flush per-asset (batch size 1)
 // because CVE results arrive late and large.
 type Batcher struct {
-	scanID   string
-	emit     EmitFunc
-	maxSize  int
-	maxAge   time.Duration
-	stage    string
+	scanID     string
+	chunkID    string
+	chunkIndex int
+	emit       EmitFunc
+	maxSize    int
+	maxAge     time.Duration
+	stage      string
 
 	mu       sync.Mutex
 	buf      []tunnel.DiscoveredAssetUpsert
@@ -39,6 +41,14 @@ func NewBatcher(scanID, stage string, emit EmitFunc, maxSize int, maxAge time.Du
 		maxSize: maxSize,
 		maxAge:  maxAge,
 	}
+}
+
+// WithChunk tags every emitted batch with the parent scan chunk. Empty chunkID
+// preserves the legacy one-scan/one-directive protocol.
+func (b *Batcher) WithChunk(chunkID string, chunkIndex int) *Batcher {
+	b.chunkID = chunkID
+	b.chunkIndex = chunkIndex
+	return b
 }
 
 // Add queues a finding. Triggers a flush if the batch is full.
@@ -116,10 +126,12 @@ func (b *Batcher) send(batch []tunnel.DiscoveredAssetUpsert) {
 	seq := b.seq
 	b.mu.Unlock()
 	payload := tunnel.AssetDiscoveredPayload{
-		ScanID:   b.scanID,
-		BatchSeq: seq,
-		Stage:    b.stage,
-		Assets:   batch,
+		ScanID:     b.scanID,
+		ChunkID:    b.chunkID,
+		ChunkIndex: b.chunkIndex,
+		BatchSeq:   seq,
+		Stage:      b.stage,
+		Assets:     batch,
 	}
 	_ = b.emit(tunnel.TypeAssetDiscovered, payload)
 }

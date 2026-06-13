@@ -108,6 +108,12 @@ func (h *Hub) DeliverProbeResult(result ProbeResultPayload) {
 
 // HandleConnection upgrades an HTTP request to WebSocket and manages the connection.
 func (h *Hub) HandleConnection(w http.ResponseWriter, r *http.Request, agentID string) error {
+	return h.HandleConnectionWithHook(w, r, agentID, nil)
+}
+
+// HandleConnectionWithHook upgrades an HTTP request to WebSocket and invokes
+// onConnect after the connection is registered and Send(agentID) can deliver.
+func (h *Hub) HandleConnectionWithHook(w http.ResponseWriter, r *http.Request, agentID string, onConnect func()) error {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return fmt.Errorf("upgrading to websocket: %w", err)
@@ -115,6 +121,9 @@ func (h *Hub) HandleConnection(w http.ResponseWriter, r *http.Request, agentID s
 
 	h.register(agentID, conn)
 	defer h.unregister(agentID)
+	if onConnect != nil {
+		onConnect()
+	}
 
 	conn.SetReadLimit(maxMessageSize)
 	_ = conn.SetReadDeadline(time.Now().Add(pongWait))

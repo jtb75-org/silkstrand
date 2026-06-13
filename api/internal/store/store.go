@@ -131,6 +131,18 @@ type Store interface {
 	AgentHasRunningScanExcluding(ctx context.Context, agentID, excludeScanID string) (bool, error)
 	OldestQueuedScanForAgent(ctx context.Context, agentID string) (*model.Scan, error)
 	FailStaleQueuedScans(ctx context.Context, maxAge time.Duration) (int, error)
+	CreateScanChunks(ctx context.Context, chunks []CreateScanChunkInput) error
+	ClaimNextScanChunk(ctx context.Context, scanID, agentID string) (*model.ScanChunk, error)
+	AckScanChunkStarted(ctx context.Context, chunkID string) error
+	ResetScanChunkToPending(ctx context.Context, chunkID string) error
+	CompleteScanChunk(ctx context.Context, chunkID string, assetsFound, hostsScanned int) (bool, error)
+	FailScanChunk(ctx context.Context, chunkID, reason string) (bool, error)
+	ResetRunningScanChunksForAgent(ctx context.Context, agentID string) ([]string, error)
+	ResetUnackedScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error)
+	ResetStaleRunningScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error)
+	FailAbandonedChunkedScans(ctx context.Context, maxAge time.Duration) (int, error)
+	ActiveChunkedParentsWithoutRunningChunk(ctx context.Context, limit int) ([]ChunkedParent, error)
+	ScanChunkSummary(ctx context.Context, scanID string) (*ScanChunkSummary, error)
 
 	// --- Assets + endpoints (ADR 006 D2) ----------------------------
 	//
@@ -372,6 +384,32 @@ type CreateScanForDefinitionInput struct {
 	ScanType         string
 }
 
+// CreateScanChunkInput is the durable unit used by chunked discovery scans.
+type CreateScanChunkInput struct {
+	ScanID           string
+	TenantID         string
+	AgentID          *string
+	ChunkIndex       int
+	TargetType       string
+	TargetIdentifier string
+	IPStart          *string
+	IPEnd            *string
+	IPCount          int
+}
+
+type ScanChunkSummary struct {
+	Total     int
+	Pending   int
+	Running   int
+	Completed int
+	Failed    int
+}
+
+type ChunkedParent struct {
+	ScanID  string
+	AgentID string
+}
+
 // CreateInstallTokenInput carries a new install token plus the ADR 013 D5
 // auto-discover intent (copied onto the agent at bootstrap). DiscoverCron is
 // nil for a one-shot (on-connect only) discovery.
@@ -418,28 +456,28 @@ type AssetFilter struct {
 
 // AssetEndpointFilter is the parsed query for ListAssetEndpoints.
 type AssetEndpointFilter struct {
-	Service string
-	Port    int
-	Source  string
-	Q       string
-	Page    int
+	Service  string
+	Port     int
+	Source   string
+	Q        string
+	Page     int
 	PageSize int
 }
 
 // AssetEndpointRow is the flattened shape returned by ListAssetEndpoints,
 // joining asset_endpoints with the parent asset for the list view.
 type AssetEndpointRow struct {
-	ID             string
-	AssetID        string
-	Host           string // hostname or IP
-	IP             string
-	Port           int
-	Protocol       string
-	Service        *string
-	Version        *string
-	Technologies   json.RawMessage
-	FindingsCount  int
-	LastSeen       time.Time
+	ID            string
+	AssetID       string
+	Host          string // hostname or IP
+	IP            string
+	Port          int
+	Protocol      string
+	Service       *string
+	Version       *string
+	Technologies  json.RawMessage
+	FindingsCount int
+	LastSeen      time.Time
 }
 
 // AgentLogEventInput is what handleAgentLog passes to InsertAgentLogEvent.

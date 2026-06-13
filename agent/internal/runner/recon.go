@@ -37,6 +37,8 @@ func (r *ReconRunner) Run(_ context.Context, _ RunRequest) (json.RawMessage, err
 func ReconRun(ctx context.Context, d tunnel.DirectivePayload, emit recon.EmitFunc) (*recon.PipelineResult, error) {
 	return recon.Run(ctx, recon.PipelineRequest{
 		ScanID:           d.ScanID,
+		ChunkID:          d.ChunkID,
+		ChunkIndex:       d.ChunkIndex,
 		TargetIdentifier: d.TargetIdentifier,
 		TargetConfig:     d.TargetConfig,
 		Emit:             emit,

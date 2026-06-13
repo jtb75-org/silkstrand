@@ -228,6 +228,16 @@ func scanScan(sc *model.Scan, row interface{ Scan(...any) error }) error {
 		&sc.Status, &sc.ErrorMessage, &sc.StartedAt, &sc.CompletedAt, &sc.CreatedAt)
 }
 
+const scanChunkCols = `id, scan_id, tenant_id, agent_id, chunk_index, target_type, target_identifier, host(ip_start), host(ip_end), ip_count, status, attempts, assets_found, hosts_scanned, error_message, dispatched_at, started_at, completed_at, created_at, updated_at`
+
+func scanScanChunk(c *model.ScanChunk, row interface{ Scan(...any) error }) error {
+	return row.Scan(&c.ID, &c.ScanID, &c.TenantID, &c.AgentID,
+		&c.ChunkIndex, &c.TargetType, &c.TargetIdentifier,
+		&c.IPStart, &c.IPEnd, &c.IPCount, &c.Status, &c.Attempts,
+		&c.AssetsFound, &c.HostsScanned, &c.ErrorMessage,
+		&c.DispatchedAt, &c.StartedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
+}
+
 func (s *PostgresStore) ListScans(ctx context.Context) ([]model.Scan, error) {
 	tenantID := TenantID(ctx)
 	rows, err := s.db.QueryContext(ctx,
@@ -344,7 +354,11 @@ func (s *PostgresStore) DeleteScan(ctx context.Context, id string) error {
 func (s *PostgresStore) FailRunningScansForAgent(ctx context.Context, agentID string) (int, error) {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE scans SET status = $1, completed_at = NOW()
-		   WHERE agent_id = $2 AND status IN ($3, $4, $5)`,
+		   WHERE agent_id = $2
+		     AND status IN ($3, $4, $5)
+		     AND NOT EXISTS (
+		       SELECT 1 FROM scan_chunks c WHERE c.scan_id = scans.id
+		     )`,
 		model.ScanStatusFailed, agentID, model.ScanStatusPending, model.ScanStatusRunning, model.ScanStatusQueued)
 	if err != nil {
 		return 0, fmt.Errorf("failing running scans for agent: %w", err)
@@ -415,6 +429,310 @@ func (s *PostgresStore) FailStaleQueuedScans(ctx context.Context, maxAge time.Du
 	}
 	rows, _ := result.RowsAffected()
 	return int(rows), nil
+}
+
+func (s *PostgresStore) CreateScanChunks(ctx context.Context, chunks []CreateScanChunkInput) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("creating scan chunks: %w", err)
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO scan_chunks
+		   (scan_id, tenant_id, agent_id, chunk_index, target_type, target_identifier, ip_start, ip_end, ip_count)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8::inet, $9)`)
+	if err != nil {
+		return fmt.Errorf("preparing scan chunk insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, c := range chunks {
+		if _, err := stmt.ExecContext(ctx,
+			c.ScanID, c.TenantID, c.AgentID, c.ChunkIndex, c.TargetType,
+			c.TargetIdentifier, c.IPStart, c.IPEnd, c.IPCount); err != nil {
+			return fmt.Errorf("inserting scan chunk %d: %w", c.ChunkIndex, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing scan chunks: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) ClaimNextScanChunk(ctx context.Context, scanID, agentID string) (*model.ScanChunk, error) {
+	var c model.ScanChunk
+	err := scanScanChunk(&c, s.db.QueryRowContext(ctx,
+		`WITH next AS (
+		    SELECT id
+		      FROM scan_chunks
+		     WHERE scan_id = $1
+		       AND agent_id = $2
+		       AND (status = $3 OR (status = $4 AND attempts < 3))
+		     ORDER BY chunk_index
+		     LIMIT 1
+		     FOR UPDATE SKIP LOCKED
+		 )
+		 UPDATE scan_chunks sc
+		    SET status = $5,
+		        error_message = NULL,
+		        dispatched_at = NOW(),
+		        completed_at = NULL,
+		        updated_at = NOW()
+		   FROM next
+		  WHERE sc.id = next.id
+		 RETURNING `+scanChunkCols,
+		scanID, agentID, model.ScanChunkStatusPending, model.ScanChunkStatusFailed,
+		model.ScanChunkStatusRunning))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claiming next scan chunk: %w", err)
+	}
+	return &c, nil
+}
+
+func (s *PostgresStore) AckScanChunkStarted(ctx context.Context, chunkID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE scan_chunks
+		    SET dispatched_at = NULL,
+		        started_at = COALESCE(started_at, NOW()),
+		        updated_at = NOW()
+		  WHERE id = $1 AND status = $2`,
+		chunkID, model.ScanChunkStatusRunning)
+	if err != nil {
+		return fmt.Errorf("acknowledging scan chunk start: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) ResetScanChunkToPending(ctx context.Context, chunkID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE scan_chunks
+		    SET status = $1,
+		        dispatched_at = NULL,
+		        completed_at = NULL,
+		        updated_at = NOW()
+		  WHERE id = $2 AND status = $3`,
+		model.ScanChunkStatusPending, chunkID, model.ScanChunkStatusRunning)
+	if err != nil {
+		return fmt.Errorf("resetting scan chunk to pending: %w", err)
+	}
+	return nil
+}
+
+func (s *PostgresStore) CompleteScanChunk(ctx context.Context, chunkID string, assetsFound, hostsScanned int) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE scan_chunks
+		    SET status = $1,
+		        assets_found = $2,
+		        hosts_scanned = $3,
+		        error_message = NULL,
+		        dispatched_at = NULL,
+		        completed_at = NOW(),
+		        updated_at = NOW()
+		   FROM scans s
+		  WHERE scan_chunks.id = $4
+		    AND scan_chunks.scan_id = s.id
+		    AND s.status IN ($5, $6)`,
+		model.ScanChunkStatusCompleted, assetsFound, hostsScanned, chunkID,
+		model.ScanStatusPending, model.ScanStatusRunning)
+	if err != nil {
+		return false, fmt.Errorf("completing scan chunk: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}
+
+func (s *PostgresStore) FailScanChunk(ctx context.Context, chunkID, reason string) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE scan_chunks
+		    SET status = $1,
+		        attempts = attempts + 1,
+		        error_message = NULLIF($2, ''),
+		        dispatched_at = NULL,
+		        completed_at = NOW(),
+		        updated_at = NOW()
+		   FROM scans s
+		  WHERE scan_chunks.id = $3
+		    AND scan_chunks.scan_id = s.id
+		    AND s.status IN ($4, $5)`,
+		model.ScanChunkStatusFailed, reason, chunkID, model.ScanStatusPending, model.ScanStatusRunning)
+	if err != nil {
+		return false, fmt.Errorf("failing scan chunk: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}
+
+func (s *PostgresStore) ResetRunningScanChunksForAgent(ctx context.Context, agentID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE scan_chunks
+		    SET status = $1,
+		        dispatched_at = NULL,
+		        updated_at = NOW()
+		  WHERE agent_id = $2 AND status = $3
+		  RETURNING scan_id`,
+		model.ScanChunkStatusPending, agentID, model.ScanChunkStatusRunning)
+	if err != nil {
+		return nil, fmt.Errorf("resetting running scan chunks: %w", err)
+	}
+	defer rows.Close()
+	return distinctScanIDs(rows)
+}
+
+func (s *PostgresStore) ResetUnackedScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE scan_chunks
+		    SET status = $1,
+		        dispatched_at = NULL,
+		        updated_at = NOW()
+		  WHERE status = $2
+		    AND dispatched_at IS NOT NULL
+		    AND dispatched_at < NOW() - make_interval(secs => $3)
+		  RETURNING scan_id`,
+		model.ScanChunkStatusPending, model.ScanChunkStatusRunning, int(maxAge.Seconds()))
+	if err != nil {
+		return nil, fmt.Errorf("resetting unacked scan chunks: %w", err)
+	}
+	defer rows.Close()
+	return distinctScanIDs(rows)
+}
+
+func (s *PostgresStore) ResetStaleRunningScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`UPDATE scan_chunks c
+		    SET status = $1,
+		        dispatched_at = NULL,
+		        updated_at = NOW()
+		   FROM agents a
+		  WHERE c.agent_id = a.id
+		    AND c.status = $2
+		    AND c.updated_at < NOW() - make_interval(secs => $3)
+		    AND (
+		      a.status = $4
+		      OR COALESCE(a.last_heartbeat, c.updated_at) < NOW() - make_interval(secs => $3)
+		    )
+		  RETURNING c.scan_id`,
+		model.ScanChunkStatusPending, model.ScanChunkStatusRunning, int(maxAge.Seconds()), model.AgentStatusDisconnected)
+	if err != nil {
+		return nil, fmt.Errorf("resetting stale running scan chunks: %w", err)
+	}
+	defer rows.Close()
+	return distinctScanIDs(rows)
+}
+
+func (s *PostgresStore) FailAbandonedChunkedScans(ctx context.Context, maxAge time.Duration) (int, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE scans s
+		    SET status = $1,
+		        completed_at = NOW(),
+		        error_message = 'chunked discovery abandoned: agent did not reconnect before timeout'
+		   FROM agents a
+		  WHERE s.agent_id = a.id
+		    AND s.status IN ($2, $3, $4)
+		    AND COALESCE(a.last_heartbeat, s.created_at) < NOW() - make_interval(secs => $5)
+		    AND EXISTS (SELECT 1 FROM scan_chunks c WHERE c.scan_id = s.id)`,
+		model.ScanStatusFailed,
+		model.ScanStatusPending, model.ScanStatusRunning, model.ScanStatusQueued,
+		int(maxAge.Seconds()))
+	if err != nil {
+		return 0, fmt.Errorf("failing abandoned chunked scans: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
+}
+
+func (s *PostgresStore) ActiveChunkedParentsWithoutRunningChunk(ctx context.Context, limit int) ([]ChunkedParent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT s.id, s.agent_id
+		   FROM scans s
+		  WHERE s.agent_id IS NOT NULL
+		    AND s.status IN ($1, $2)
+		    AND EXISTS (SELECT 1 FROM scan_chunks c WHERE c.scan_id = s.id)
+		    AND NOT EXISTS (
+		      SELECT 1 FROM scan_chunks c
+		       WHERE c.scan_id = s.id AND c.status = $3
+		    )
+		  ORDER BY s.created_at
+		  LIMIT $4`,
+		model.ScanStatusPending, model.ScanStatusRunning, model.ScanChunkStatusRunning, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing active chunked parents without running chunk: %w", err)
+	}
+	defer rows.Close()
+	var out []ChunkedParent
+	for rows.Next() {
+		var p ChunkedParent
+		if err := rows.Scan(&p.ScanID, &p.AgentID); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func distinctScanIDs(rows *sql.Rows) ([]string, error) {
+	seen := map[string]struct{}{}
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) ScanChunkSummary(ctx context.Context, scanID string) (*ScanChunkSummary, error) {
+	var summary ScanChunkSummary
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT status, COUNT(*)
+		   FROM scan_chunks
+		  WHERE scan_id = $1
+		  GROUP BY status`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("summarizing scan chunks: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("scanning chunk summary: %w", err)
+		}
+		summary.Total += n
+		switch status {
+		case model.ScanChunkStatusPending:
+			summary.Pending = n
+		case model.ScanChunkStatusRunning:
+			summary.Running = n
+		case model.ScanChunkStatusCompleted:
+			summary.Completed = n
+		case model.ScanChunkStatusFailed:
+			summary.Failed = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("summarizing scan chunks: %w", err)
+	}
+	return &summary, nil
 }
 
 // ======================================================================

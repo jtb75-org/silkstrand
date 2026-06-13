@@ -28,8 +28,12 @@ import (
 // crash-recovery simplicity.
 type Dispatcher struct {
 	Store  store.Store
-	PubSub *pubsub.PubSub
+	PubSub DirectivePublisher
 	Bus    events.Bus
+}
+
+type DirectivePublisher interface {
+	PublishDirective(ctx context.Context, agentID string, directive pubsub.Directive) error
 }
 
 // Scheduler polls for due scan_definitions and dispatches them. One
@@ -39,6 +43,11 @@ type Dispatcher struct {
 type Scheduler struct {
 	D        Dispatcher
 	Interval time.Duration
+}
+
+type discoveryTarget struct {
+	targetType       string
+	targetIdentifier string
 }
 
 // New builds a Scheduler with a default 30s tick per ADR 007 D4.
@@ -82,6 +91,26 @@ func (s *Scheduler) Tick(ctx context.Context) {
 		slog.Info("scheduler.stale_sweep", "failed", n)
 	}
 
+	if scanIDs, err := s.D.Store.ResetStaleRunningScanChunks(ctx, 30*time.Minute); err != nil {
+		slog.Error("scheduler.chunk_reset_sweep", "error", err)
+	} else if len(scanIDs) > 0 {
+		slog.Info("scheduler.chunk_reset_sweep", "scans", len(scanIDs))
+	}
+
+	if scanIDs, err := s.D.Store.ResetUnackedScanChunks(ctx, 2*time.Minute); err != nil {
+		slog.Error("scheduler.chunk_unacked_sweep", "error", err)
+	} else if len(scanIDs) > 0 {
+		slog.Info("scheduler.chunk_unacked_sweep", "scans", len(scanIDs))
+	}
+
+	s.reconcileChunkedParents(ctx)
+
+	if n, err := s.D.Store.FailAbandonedChunkedScans(ctx, 24*time.Hour); err != nil {
+		slog.Error("scheduler.chunk_abandoned_sweep", "error", err)
+	} else if n > 0 {
+		slog.Info("scheduler.chunk_abandoned_sweep", "failed", n)
+	}
+
 	// Purge agent log events older than 24 hours.
 	if n, err := s.D.Store.DeleteOldAgentLogs(ctx, 24*time.Hour); err != nil {
 		slog.Error("scheduler.agent_log_purge", "error", err)
@@ -114,6 +143,19 @@ func (s *Scheduler) Tick(ctx context.Context) {
 			continue
 		}
 		_ = s.D.Store.SetScanDefinitionLastRun(ctx, d.ID, now, "dispatched")
+	}
+}
+
+func (s *Scheduler) reconcileChunkedParents(ctx context.Context) {
+	parents, err := s.D.Store.ActiveChunkedParentsWithoutRunningChunk(ctx, 100)
+	if err != nil {
+		slog.Error("scheduler.chunk_reconcile", "error", err)
+		return
+	}
+	for _, p := range parents {
+		if _, err := s.D.DispatchNextChunk(ctx, p.AgentID, p.ScanID); err != nil {
+			slog.Error("scheduler.chunk_reconcile_dispatch", "scan", p.ScanID, "agent", p.AgentID, "error", err)
+		}
 	}
 }
 
@@ -191,6 +233,12 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 		if err != nil {
 			return fmt.Errorf("upserting cidr target: %w", err)
 		}
+		if def.Kind == model.ScanDefinitionKindDiscovery {
+			return d.dispatchChunkedDiscovery(ctx, def, &targetID, []discoveryTarget{{
+				targetType:       model.TargetTypeCIDR,
+				targetIdentifier: *def.CIDR,
+			}})
+		}
 		return d.dispatchOne(ctx, def, nil, &targetID)
 	case model.ScanDefinitionScopeAgentAllowlist:
 		if def.AgentID == nil {
@@ -212,29 +260,21 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 			"agent", *def.AgentID, "snapshot_hash", snap.Hash,
 			"reported_at", snap.ReportedAt, "targets", len(entries))
 		// Deny is enforced agent-side (ADR 013 D4) — we dispatch allow entries
-		// as-is and let the agent re-vet locally. One scan per entry.
+		// as-is and let the agent re-vet locally. One parent scan owns one chunk
+		// list so large scopes resume from chunk checkpoints instead of creating
+		// many independent scans.
 		// NB: non-CIDR entries (IP/range/hostname) are upserted as targets.type
 		// ='cidr' since that's the only range-target upsert today; the agent
 		// keys off target_identifier so this works, but the target row's type is
 		// semantically loose — a typed range-target upsert is a future cleanup.
-		var firstErr error
+		targets := make([]discoveryTarget, 0, len(entries))
 		for _, entry := range entries {
-			targetID, err := d.Store.UpsertTargetByCIDR(ctx, def.TenantID, entry, def.AgentID, "scheduled")
-			if err != nil {
-				slog.Warn("scheduler.agent_allowlist_target", "definition", def.ID, "entry", entry, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			if err := d.dispatchOne(ctx, def, nil, &targetID); err != nil {
-				slog.Warn("scheduler.dispatch_one", "definition", def.ID, "entry", entry, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
+			targets = append(targets, discoveryTarget{
+				targetType:       discoveryTargetType(entry),
+				targetIdentifier: entry,
+			})
 		}
-		return firstErr
+		return d.dispatchChunkedDiscovery(ctx, def, nil, targets)
 	case model.ScanDefinitionScopeDNSList:
 		if def.AgentID == nil {
 			return fmt.Errorf("scope=dns_list requires agent_id")
@@ -250,28 +290,17 @@ func (d Dispatcher) Execute(ctx context.Context, def model.ScanDefinition) error
 		}
 		slog.Info("scheduler.dns_list_dispatch", "definition", def.ID,
 			"agent", *def.AgentID, "targets", len(names))
-		// One vhost-aware directive per name. The agent re-vets each name against
-		// its local allowlist (ADR 014 D3 / D11), so out-of-scope names are
-		// blocked agent-side. As with agent_allowlist, names upsert as cidr-type
-		// targets — the agent keys off target_identifier.
-		var firstErr error
+		// One parent scan owns one vhost-aware chunk per name. The agent re-vets
+		// each name against its local allowlist (ADR 014 D3 / D11), so
+		// out-of-scope names are blocked agent-side.
+		targets := make([]discoveryTarget, 0, len(names))
 		for _, name := range names {
-			targetID, err := d.Store.UpsertTargetByCIDR(ctx, def.TenantID, name, def.AgentID, "scheduled")
-			if err != nil {
-				slog.Warn("scheduler.dns_list_target", "definition", def.ID, "name", name, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			if err := d.dispatchOne(ctx, def, nil, &targetID); err != nil {
-				slog.Warn("scheduler.dispatch_one", "definition", def.ID, "name", name, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
+			targets = append(targets, discoveryTarget{
+				targetType:       discoveryTargetType(name),
+				targetIdentifier: name,
+			})
 		}
-		return firstErr
+		return d.dispatchChunkedDiscovery(ctx, def, nil, targets)
 	}
 	return fmt.Errorf("unknown scope_kind: %q", def.ScopeKind)
 }
@@ -290,6 +319,18 @@ func allowlistTargets(snap *store.AgentAllowlistSnapshot) []string {
 		}
 	}
 	return out
+}
+
+func discoveryTargetType(identifier string) string {
+	if strings.Contains(identifier, "-") {
+		if _, _, err := parseIPv4Range(identifier); err == nil {
+			return model.TargetTypeNetworkRange
+		}
+	}
+	if strings.Contains(identifier, "/") {
+		return model.TargetTypeCIDR
+	}
+	return "host"
 }
 
 func (d Dispatcher) dispatchOne(ctx context.Context, def model.ScanDefinition, endpointID, targetID *string) error {
@@ -357,6 +398,129 @@ func (d Dispatcher) dispatchOne(ctx context.Context, def model.ScanDefinition, e
 	return nil
 }
 
+func (d Dispatcher) dispatchChunkedDiscovery(ctx context.Context, def model.ScanDefinition, parentTargetID *string, targets []discoveryTarget) error {
+	if def.AgentID == nil {
+		return fmt.Errorf("chunked discovery requires agent_id")
+	}
+	bundleID := def.BundleID
+	if bundleID == nil {
+		id := model.DiscoveryBundleID
+		bundleID = &id
+	}
+	sc, err := d.Store.CreateScanForDefinition(ctx, store.CreateScanForDefinitionInput{
+		TenantID:         def.TenantID,
+		ScanDefinitionID: def.ID,
+		AgentID:          def.AgentID,
+		TargetID:         parentTargetID,
+		BundleID:         bundleID,
+		ScanType:         model.ScanTypeDiscovery,
+	})
+	if err != nil {
+		return fmt.Errorf("creating chunked discovery scan: %w", err)
+	}
+	chunks := make([]store.CreateScanChunkInput, 0, len(targets))
+	for _, target := range targets {
+		pieces, err := splitDiscoveryTarget(sc.ID, def.TenantID, def.AgentID, target.targetType, target.targetIdentifier, DefaultDiscoveryChunkIPs)
+		if err != nil {
+			_ = d.Store.FailScan(ctx, sc.ID, err.Error())
+			return fmt.Errorf("splitting discovery target %q: %w", target.targetIdentifier, err)
+		}
+		for _, piece := range pieces {
+			piece.ChunkIndex = len(chunks)
+			chunks = append(chunks, piece)
+		}
+	}
+	if len(chunks) == 0 {
+		_ = d.Store.FailScan(ctx, sc.ID, "chunked discovery had no targets")
+		return fmt.Errorf("chunked discovery had no targets")
+	}
+	if err := d.Store.CreateScanChunks(ctx, chunks); err != nil {
+		_ = d.Store.FailScan(ctx, sc.ID, err.Error())
+		return fmt.Errorf("creating scan chunks: %w", err)
+	}
+	if d.PubSub == nil {
+		slog.Info("scheduler.chunked_scan_created_without_dispatch", "scan", sc.ID, "chunks", len(chunks))
+		return nil
+	}
+	busy, err := d.Store.AgentHasRunningScanExcluding(ctx, *def.AgentID, sc.ID)
+	if err != nil {
+		return fmt.Errorf("checking agent busy: %w", err)
+	}
+	if busy {
+		if err := d.Store.UpdateScanStatus(ctx, sc.ID, model.ScanStatusQueued); err != nil {
+			return fmt.Errorf("queueing chunked scan: %w", err)
+		}
+		d.publishScanStatus(ctx, sc.ID)
+		slog.Info("scheduler.chunked_queued", "scan", sc.ID, "agent", *def.AgentID, "chunks", len(chunks))
+		return nil
+	}
+	_, err = d.DispatchNextChunk(ctx, *def.AgentID, sc.ID)
+	return err
+}
+
+// DispatchNextChunk claims and publishes the next runnable chunk for a parent
+// discovery scan. It returns true when it published a chunk directive.
+func (d Dispatcher) DispatchNextChunk(ctx context.Context, agentID, scanID string) (bool, error) {
+	if d.PubSub == nil {
+		return false, nil
+	}
+	summary, err := d.Store.ScanChunkSummary(ctx, scanID)
+	if err != nil {
+		return false, fmt.Errorf("summarizing scan chunks: %w", err)
+	}
+	if summary == nil || summary.Total == 0 {
+		return false, nil
+	}
+	chunk, err := d.Store.ClaimNextScanChunk(ctx, scanID, agentID)
+	if err != nil {
+		return false, fmt.Errorf("claiming next scan chunk: %w", err)
+	}
+	if chunk == nil {
+		scan, err := d.Store.GetScanByID(ctx, scanID)
+		if err != nil || scan == nil || (scan.Status != model.ScanStatusPending && scan.Status != model.ScanStatusRunning) {
+			return false, nil
+		}
+		if summary.Completed == summary.Total {
+			if err := d.Store.UpdateScanStatus(ctx, scanID, model.ScanStatusCompleted); err != nil {
+				return false, fmt.Errorf("completing chunked scan: %w", err)
+			}
+			d.publishScanStatus(ctx, scanID)
+			d.DrainAgentQueue(ctx, agentID)
+		} else if summary.Failed > 0 && summary.Pending == 0 && summary.Running == 0 {
+			if err := d.Store.FailScan(ctx, scanID, "one or more discovery chunks failed"); err != nil {
+				return false, fmt.Errorf("failing chunked scan: %w", err)
+			}
+			d.publishScanStatus(ctx, scanID)
+			d.DrainAgentQueue(ctx, agentID)
+		}
+		return false, nil
+	}
+	bundleID := model.DiscoveryBundleID
+	scan, err := d.Store.GetScanByID(ctx, scanID)
+	if err == nil && scan != nil && scan.BundleID != nil {
+		bundleID = *scan.BundleID
+	}
+	directive := pubsub.Directive{
+		ScanID:           scanID,
+		ScanType:         model.ScanTypeDiscovery,
+		BundleID:         bundleID,
+		TenantID:         chunk.TenantID,
+		ChunkID:          chunk.ID,
+		ChunkIndex:       chunk.ChunkIndex,
+		ChunkTotal:       summary.Total,
+		TargetType:       chunk.TargetType,
+		TargetIdentifier: chunk.TargetIdentifier,
+	}
+	if err := d.PubSub.PublishDirective(ctx, agentID, directive); err != nil {
+		if resetErr := d.Store.ResetScanChunkToPending(ctx, chunk.ID); resetErr != nil {
+			slog.Error("scheduler.chunk_publish_reset", "scan", scanID, "chunk", chunk.ID, "error", resetErr)
+		}
+		return false, fmt.Errorf("publishing chunk directive: %w", err)
+	}
+	slog.Info("scheduler.chunk_dispatched", "scan", scanID, "chunk", chunk.ID, "index", chunk.ChunkIndex, "total", summary.Total, "agent", agentID)
+	return true, nil
+}
+
 // DrainAgentQueue checks if the given agent has queued scans and
 // dispatches the oldest one. Called from terminal scan states
 // (completed, failed) and from the stuck-scan cleanup path.
@@ -378,6 +542,12 @@ func (d Dispatcher) DrainAgentQueue(ctx context.Context, agentID string) {
 		return
 	}
 	d.publishScanStatus(ctx, next.ID)
+	if summary, err := d.Store.ScanChunkSummary(ctx, next.ID); err == nil && summary != nil && summary.Total > 0 {
+		if _, err := d.DispatchNextChunk(ctx, agentID, next.ID); err != nil {
+			slog.Error("drain_queue.chunk_publish", "scan", next.ID, "agent", agentID, "error", err)
+		}
+		return
+	}
 	directive := pubsub.Directive{
 		ScanID:   next.ID,
 		ScanType: next.ScanType,

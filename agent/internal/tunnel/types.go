@@ -10,20 +10,20 @@ type Message struct {
 
 // Message type constants matching the API's websocket protocol.
 const (
-	TypeDirective          = "directive"
-	TypeScanStarted        = "scan_started"
-	TypeScanResults        = "scan_results"
-	TypeScanError          = "scan_error"
-	TypeHeartbeat          = "heartbeat"
-	TypeUpgrade            = "upgrade"
-	TypeProbe              = "probe"
-	TypeProbeResult        = "probe_result"
-	TypeAssetDiscovered    = "asset_discovered"    // ADR 003 R1a
-	TypeDiscoveryCompleted = "discovery_completed" // ADR 003 R1a
-	TypeAllowlistSnapshot      = "allowlist_snapshot"      // ADR 003 D11 — agent → server informational
-	TypeCredentialTest         = "credential_test"         // server → agent: test a credential source
-	TypeCredentialTestResult   = "credential_test_result"  // agent → server: result of credential test
-	TypeFactsCollected         = "facts_collected"         // ADR 011 — agent → server: raw collector facts
+	TypeDirective            = "directive"
+	TypeScanStarted          = "scan_started"
+	TypeScanResults          = "scan_results"
+	TypeScanError            = "scan_error"
+	TypeHeartbeat            = "heartbeat"
+	TypeUpgrade              = "upgrade"
+	TypeProbe                = "probe"
+	TypeProbeResult          = "probe_result"
+	TypeAssetDiscovered      = "asset_discovered"       // ADR 003 R1a
+	TypeDiscoveryCompleted   = "discovery_completed"    // ADR 003 R1a
+	TypeAllowlistSnapshot    = "allowlist_snapshot"     // ADR 003 D11 — agent → server informational
+	TypeCredentialTest       = "credential_test"        // server → agent: test a credential source
+	TypeCredentialTestResult = "credential_test_result" // agent → server: result of credential test
+	TypeFactsCollected       = "facts_collected"        // ADR 011 — agent → server: raw collector facts
 )
 
 // AllowlistSnapshotPayload is the agent's most recently reported
@@ -76,6 +76,9 @@ type CredentialResolverConfig struct {
 type DirectivePayload struct {
 	ScanID             string                    `json:"scan_id"`
 	ScanType           string                    `json:"scan_type,omitempty"` // "compliance" (default) | "discovery"
+	ChunkID            string                    `json:"chunk_id,omitempty"`
+	ChunkIndex         int                       `json:"chunk_index,omitempty"`
+	ChunkTotal         int                       `json:"chunk_total,omitempty"`
 	BundleID           string                    `json:"bundle_id"`
 	BundleName         string                    `json:"bundle_name"`
 	BundleVersion      string                    `json:"bundle_version"`
@@ -84,17 +87,19 @@ type DirectivePayload struct {
 	TargetType         string                    `json:"target_type"`
 	TargetIdentifier   string                    `json:"target_identifier"`
 	TargetConfig       json.RawMessage           `json:"target_config"`
-	Credentials        json.RawMessage           `json:"credentials,omitempty"`          // set when server resolves (static, aws_secrets_manager)
-	CredentialResolver *CredentialResolverConfig  `json:"credential_resolver,omitempty"`  // set for agent-side resolution (on-prem vault)
+	Credentials        json.RawMessage           `json:"credentials,omitempty"`         // set when server resolves (static, aws_secrets_manager)
+	CredentialResolver *CredentialResolverConfig `json:"credential_resolver,omitempty"` // set for agent-side resolution (on-prem vault)
 }
 
 // AssetDiscoveredPayload is sent during a discovery scan with a batch of
 // findings. Process inline server-side per ADR 003 D9.
 type AssetDiscoveredPayload struct {
-	ScanID   string                  `json:"scan_id"`
-	BatchSeq int                     `json:"batch_seq,omitempty"`
-	Stage    string                  `json:"stage,omitempty"` // naabu|httpx|nuclei
-	Assets   []DiscoveredAssetUpsert `json:"assets"`
+	ScanID     string                  `json:"scan_id"`
+	ChunkID    string                  `json:"chunk_id,omitempty"`
+	ChunkIndex int                     `json:"chunk_index,omitempty"`
+	BatchSeq   int                     `json:"batch_seq,omitempty"`
+	Stage      string                  `json:"stage,omitempty"` // naabu|httpx|nuclei
+	Assets     []DiscoveredAssetUpsert `json:"assets"`
 }
 
 // DiscoveredAssetUpsert is one normalized asset finding.
@@ -133,13 +138,16 @@ type CredentialTestResultPayload struct {
 // DiscoveryCompletedPayload is the terminal message for a discovery scan.
 type DiscoveryCompletedPayload struct {
 	ScanID       string `json:"scan_id"`
+	ChunkID      string `json:"chunk_id,omitempty"`
+	ChunkIndex   int    `json:"chunk_index,omitempty"`
 	AssetsFound  int    `json:"assets_found"`
 	HostsScanned int    `json:"hosts_scanned"`
 }
 
 // ScanStartedPayload is sent to the server when scan execution begins.
 type ScanStartedPayload struct {
-	ScanID string `json:"scan_id"`
+	ScanID  string `json:"scan_id"`
+	ChunkID string `json:"chunk_id,omitempty"`
 }
 
 // ScanResultsPayload is sent to the server with completed scan results.
@@ -154,8 +162,9 @@ type ScanResultsPayload struct {
 
 // ScanErrorPayload is sent to the server when scan execution fails.
 type ScanErrorPayload struct {
-	ScanID string `json:"scan_id"`
-	Error  string `json:"error"`
+	ScanID  string `json:"scan_id"`
+	ChunkID string `json:"chunk_id,omitempty"`
+	Error   string `json:"error"`
 }
 
 // HeartbeatPayload is sent periodically to the server.
