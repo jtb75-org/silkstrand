@@ -26,6 +26,7 @@ jobs:
       docker: ${{ steps.filter.outputs.docker }}
       backoffice: ${{ steps.filter.outputs.backoffice }}
       backoffice-web: ${{ steps.filter.outputs.backoffice-web }}
+      collectors: ${{ steps.filter.outputs.collectors }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -50,6 +51,8 @@ jobs:
               - '!backoffice/web/**'
             backoffice-web:
               - 'backoffice/web/**'
+            collectors:
+              - 'collectors/**'
 
   go-lint-test:
     name: Go Lint & Test
@@ -80,6 +83,30 @@ jobs:
 
       - name: Test API
         run: cd api && go test ./... -v -race -coverprofile=coverage.out
+
+  collectors-go:
+    name: Collectors Go Lint & Test
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.collectors == 'true'
+    strategy:
+      matrix:
+        # Add new collector modules here so each gets lint + test + build coverage.
+        collector: [mssql]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          working-directory: collectors/${{ matrix.collector }}
+
+      - name: Test
+        run: cd collectors/${{ matrix.collector }} && go test ./... -v -race
 
   web-lint-test:
     name: Web Lint & Test
