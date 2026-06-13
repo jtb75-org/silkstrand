@@ -73,7 +73,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 // Tick runs one scheduler cycle: claim due definitions, advance their
 // next_run_at, and dispatch each. Also sweeps stale queued scans.
 func (s *Scheduler) Tick(ctx context.Context) {
-	// Sweep queued scans older than 30 minutes.
+	// Sweep queued scans older than 30 minutes that have no running/pending
+	// sibling to drain them (FailStaleQueuedScans guards on that — a scan
+	// queued behind a healthy long-running scan is not stale).
 	if n, err := s.D.Store.FailStaleQueuedScans(ctx, 30*time.Minute); err != nil {
 		slog.Error("scheduler.stale_sweep", "error", err)
 	} else if n > 0 {

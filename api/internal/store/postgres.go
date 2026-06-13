@@ -384,12 +384,32 @@ func (s *PostgresStore) OldestQueuedScanForAgent(ctx context.Context, agentID st
 	return &sc, nil
 }
 
+// FailStaleQueuedScans fails queued scans that can no longer be drained.
+//
+// A queued scan is only stale if NOTHING on its agent will ever dispatch
+// it: the drain that promotes queued → pending fires from the agent's
+// terminal scan states (DrainAgentQueue on scan_results / scan_error /
+// discovery_completed). So a scan queued *behind a healthy running or
+// pending scan* is legitimately waiting — not stale — even if that sibling
+// runs for hours (a /16 discovery can run 12h+). The NOT EXISTS guard
+// excludes those: we only time out a queued scan whose agent has no
+// running/pending sibling left to trigger a drain (e.g. the drain was
+// missed, or the directive was lost). Without this guard the age-based
+// sweep killed scans that were correctly waiting behind a long scan.
 func (s *PostgresStore) FailStaleQueuedScans(ctx context.Context, maxAge time.Duration) (int, error) {
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE scans
-		   SET status = $1, completed_at = NOW(), error_message = 'queued scan timed out'
-		   WHERE status = $2 AND created_at < NOW() - make_interval(secs => $3)`,
-		model.ScanStatusFailed, model.ScanStatusQueued, int(maxAge.Seconds()))
+		`UPDATE scans s
+		   SET status = $1, completed_at = NOW(),
+		       error_message = 'queued scan timed out: no active scan on agent to dispatch it'
+		   WHERE s.status = $2
+		     AND s.created_at < NOW() - make_interval(secs => $3)
+		     AND NOT EXISTS (
+		       SELECT 1 FROM scans r
+		        WHERE r.agent_id = s.agent_id
+		          AND r.status IN ($4, $5)
+		     )`,
+		model.ScanStatusFailed, model.ScanStatusQueued, int(maxAge.Seconds()),
+		model.ScanStatusPending, model.ScanStatusRunning)
 	if err != nil {
 		return 0, fmt.Errorf("failing stale queued scans: %w", err)
 	}
