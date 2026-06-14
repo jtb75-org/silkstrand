@@ -61,5 +61,30 @@ PR keeps review tractable.
 2. `hcom list -v` + `hcom events --last 30` — roster + recent activity.
 3. Verify the `dc-us` deploy rolled (RESUME.md carries the `kubectl get deploy` command
    and the expected SHAs).
-4. Re-spawn coding/review agents as needed (a reboot kills them); confirm their worktrees.
+4. Re-spawn coding/review agents as needed (a reboot kills them); confirm their worktrees —
+   see **Spinning up the team** below.
 5. Surface open decisions to `@bigboss` before dispatching work.
+
+## Spinning up the team
+
+When `@bigboss` says **"spin up the team"** (or similar), the orchestrator spawns the
+coder + reviewer via hcom — `@bigboss` does not start them by hand. A reboot kills all
+agents, so this is the standard post-restart move.
+
+```bash
+# Coder — Claude, in its persistent worktree (reused across reboots)
+hcom 1 claude --tag coder --dir /Users/joe/repo/silkstrand-dosa \
+  --hcom-prompt "You are the CODER on SilkStrand. Read AGENTS.md and CLAUDE.md first. Work ONLY in this worktree, branch from FRESH origin/main, never the main tree. Await tasks from the orchestrator over hcom; report PR# + branch when a PR is ready (gates green). You do not merge."
+
+# Reviewer — Codex (auto-reads AGENTS.md), uses its own /tmp worktrees
+hcom 1 codex --tag reviewer \
+  --hcom-prompt "You are the REVIEWER on SilkStrand. Read AGENTS.md and CLAUDE.md. Review PRs the orchestrator routes to you in your own /tmp worktree; report findings and an approve/hold, run the web/Go gates, and do NOT merge."
+```
+
+Notes:
+- hcom assigns fresh random 4-letter handles on each spawn — **report the assigned
+  handles back to `@bigboss`** so they can refer to the agents by name.
+- If a stopped agent's session still exists, prefer `hcom r <name>` (resume) over a
+  fresh spawn to keep its context.
+- Set a longer keep-alive for long rollouts so an agent doesn't time out mid-task:
+  `hcom config -i self subagent_timeout <SEC>`.

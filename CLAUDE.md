@@ -2,6 +2,8 @@
 
 SilkStrand is a SaaS-based CIS compliance scanner that reaches into private customer environments via lightweight edge agents. Sensitive data never leaves the customer network — only structured compliance results traverse the tunnel.
 
+> **Multi-agent work?** Read [AGENTS.md](./AGENTS.md) first — it's the coordination contract (roles, worktree rules, branch-from-fresh-main, gate flow, hcom/homelab gotchas, restart checklist). CLAUDE.md auto-loads for Claude agents but AGENTS.md does not, so this pointer is how you find it.
+
 ## Architecture Overview
 
 SilkStrand has a three-tier architecture: a **backoffice manager** (control plane), one or more **data centers** (logical "pseudo-DC" deployments), and **edge agents** (customer environments).
