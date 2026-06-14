@@ -154,7 +154,7 @@ function Section({ title, icon, description, sources, allowedTypes, supportsMapp
     {
       id: 'created',
       header: 'Created',
-      accessorFn: (s) => s.created_at,
+      enableSorting: false,
       cell: ({ row }) => <span style={{ fontSize: 12 }}>{new Date(row.original.created_at).toLocaleDateString()}</span>,
     },
     ...(supportsMappings
