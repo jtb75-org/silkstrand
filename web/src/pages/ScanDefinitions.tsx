@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { CalendarClock, SearchX } from 'lucide-react';
 import { useToast } from '../lib/toast';
 import {
   listScanDefinitions,
@@ -27,6 +29,8 @@ import type {
   Agent,
   Collection,
 } from '../api/types';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 // Scopes the user can pick in the form. The backend's CHECK constraint
 // (ADR 007 D3) enforces exactly-one, so we mirror the three options here.
@@ -323,10 +327,80 @@ export default function ScanDefinitions() {
     }
   }
 
+  // Per-row actions (action-only page — no row-click). Plain render fn closing
+  // over the mutations; buttons carry their own handlers/confirms.
+  const renderActions = (d: ScanDefinition) => (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 'var(--ss-space-xs)' }}>
+      <button
+        className="btn btn-sm"
+        onClick={() => executeMut.mutate(d.id)}
+        disabled={executeMut.isPending}
+        title="Trigger a manual run now — does not shift the next scheduled run"
+      >
+        Run now
+      </button>
+      <button className="btn btn-sm" onClick={() => handleEdit(d)}>Edit</button>
+      <button
+        className="btn btn-sm"
+        onClick={() => toggleMut.mutate({ id: d.id, enable: !d.enabled })}
+        disabled={toggleMut.isPending}
+      >
+        {d.enabled ? 'Disable' : 'Enable'}
+      </button>
+      <button
+        className="btn btn-sm btn-danger"
+        onClick={() => { if (window.confirm(`Delete “${d.name}”?`)) deleteMut.mutate(d.id); }}
+        disabled={deleteMut.isPending}
+      >
+        Delete
+      </button>
+    </div>
+  );
+
+  const columns: ColumnDef<ScanDefinition>[] = [
+    { id: 'name', header: 'Name', accessorFn: (d) => d.name },
+    { id: 'type', header: 'Type', accessorFn: (d) => d.kind, cell: ({ row }) => <span className="badge badge-type">{row.original.kind}</span> },
+    { id: 'scope', header: 'Scope', accessorFn: (d) => scopeLabel(d) },
+    {
+      id: 'schedule',
+      header: 'Schedule',
+      accessorFn: (d) => d.schedule ?? '',
+      cell: ({ row }) => row.original.schedule ?? <span className="muted">manual</span>,
+    },
+    {
+      id: 'last',
+      header: 'Last',
+      accessorFn: (d) => d.last_run_at ?? '',
+      cell: ({ row }) => (row.original.last_run_at ? new Date(row.original.last_run_at).toLocaleString() : '—'),
+    },
+    {
+      id: 'next',
+      header: 'Next',
+      accessorFn: (d) => d.next_run_at ?? '',
+      cell: ({ row }) => (row.original.next_run_at ? new Date(row.original.next_run_at).toLocaleString() : '—'),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ScanStatusChip
+          status={defStatus[row.original.id]}
+          enabled={row.original.enabled}
+          latestScan={latestScanForDef(row.original.id)}
+        />
+      ),
+    },
+    { id: 'actions', header: '', enableSorting: false, cell: ({ row }) => renderActions(row.original) },
+  ];
+
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h2 style={{ margin: 0 }}>Scan Definitions</h2>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <CalendarClock size={22} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h2 style={{ margin: 0 }}>Scan Definitions</h2>
+        </div>
         <button
           className="btn btn-primary"
           onClick={() => {
@@ -355,7 +429,7 @@ export default function ScanDefinitions() {
 
           <div className="form-group">
             <label>Kind</label>
-            <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-lg)' }}>
               <label style={{ fontWeight: 'normal' }}>
                 <input
                   type="radio"
@@ -377,7 +451,7 @@ export default function ScanDefinitions() {
 
           <div className="form-group">
             <label>Scope</label>
-            <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-lg)' }}>
               {SCOPE_KINDS.map((s) => (
                 <label key={s.value} style={{ fontWeight: 'normal' }}>
                   <input
@@ -480,7 +554,7 @@ export default function ScanDefinitions() {
               value={schedule}
               onChange={(e) => setSchedule(e.target.value)}
             />
-            <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+            <p className="muted" style={{ fontSize: 13, marginTop: 'var(--ss-space-xs)' }}>
               {cronHelp(schedule)}
             </p>
           </div>
@@ -514,71 +588,23 @@ export default function ScanDefinitions() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">Failed to load: {(error as Error).message}</p>}
-      {!isLoading && defs && defs.length === 0 && <p>No scan definitions yet.</p>}
-
-      {defs && defs.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Scope</th>
-              <th>Schedule</th>
-              <th>Last</th>
-              <th>Next</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {defs.map((d) => (
-              <tr key={d.id} style={!d.enabled ? { opacity: 0.5 } : undefined}>
-                <td>{d.name}</td>
-                <td><span className="badge badge-type">{d.kind}</span></td>
-                <td>{scopeLabel(d)}</td>
-                <td>{d.schedule ?? <span className="muted">manual</span>}</td>
-                <td>{d.last_run_at ? new Date(d.last_run_at).toLocaleString() : '—'}</td>
-                <td>{d.next_run_at ? new Date(d.next_run_at).toLocaleString() : '—'}</td>
-                <td><ScanStatusChip status={defStatus[d.id]} enabled={d.enabled} latestScan={latestScanForDef(d.id)} /></td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    onClick={() => executeMut.mutate(d.id)}
-                    disabled={executeMut.isPending}
-                    title="Trigger a manual run now — does not shift the next scheduled run"
-                  >
-                    Run now
-                  </button>
-                  <button className="btn btn-sm" style={{ marginRight: 6 }} onClick={() => handleEdit(d)}>
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    onClick={() => toggleMut.mutate({ id: d.id, enable: !d.enabled })}
-                    disabled={toggleMut.isPending}
-                  >
-                    {d.enabled ? 'Disable' : 'Enable'}
-                  </button>
-                  <button
-                    className="btn btn-sm btn-danger"
-                    onClick={() => {
-                      if (window.confirm(`Delete “${d.name}”?`)) deleteMut.mutate(d.id);
-                    }}
-                    disabled={deleteMut.isPending}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {!isLoading && !error && defs && defs.length === 0 && (
+        <EmptyState icon={<SearchX />} title="No scan definitions yet.">
+          <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ New Scan Definition</button>
+        </EmptyState>
       )}
 
       {defs && defs.length > 0 && (
-        <section style={{ marginTop: 24 }}>
+        <DataTable
+          columns={columns}
+          data={defs}
+          getRowId={(d) => d.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
+      )}
+
+      {defs && defs.length > 0 && (
+        <section style={{ marginTop: 'var(--ss-space-xl)' }}>
           <h3>Coverage Impact</h3>
           <ul className="coverage-impact" style={{ paddingLeft: 18 }}>
             {defs.map((d, i) => {
@@ -612,16 +638,16 @@ function ScanStatusChip({ status, enabled, latestScan }: {
   latestScan?: Scan;
 }) {
   if (!enabled) {
-    return <span className="badge" style={{ background: '#9ca3af', color: '#fff' }}>Disabled</span>;
+    return <span className="badge" style={{ background: 'var(--ss-border-strong)', color: 'var(--ss-text-on-accent)' }}>Disabled</span>;
   }
   if (!status || status.status === 'idle') return null;
   switch (status.status) {
     case 'running':
       return (
-        <span className="badge badge-completed" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="badge badge-completed" style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
           <span style={{
             width: 6, height: 6, borderRadius: '50%',
-            background: 'var(--ss-success, #10b981)',
+            background: 'var(--ss-success)',
             animation: 'pulse 1.5s ease-in-out infinite',
           }} />
           Running
@@ -629,13 +655,13 @@ function ScanStatusChip({ status, enabled, latestScan }: {
       );
     case 'queued':
       return (
-        <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span className="badge badge-warning" style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
           Queued{status.queuedCount > 1 ? ` (${status.queuedCount})` : ''}
         </span>
       );
     case 'pending':
       return (
-        <span className="badge" style={{ background: 'var(--ss-info-bg, #cffafe)', color: 'var(--ss-info, #06b6d4)' }}>
+        <span className="badge" style={{ background: 'var(--ss-info-bg)', color: 'var(--ss-info)' }}>
           Dispatched
         </span>
       );
