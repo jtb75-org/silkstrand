@@ -586,12 +586,25 @@ func emitScanProgress(ctx context.Context, s store.Store, bus events.Bus, scan *
 	})
 }
 
+// stageNucleiNetwork is the asset_discovered batch stage for the ADR 019 P1
+// service-detection pass: its endpoint upserts are fill-only and it never
+// produces findings.
+const stageNucleiNetwork = "nuclei-network"
+
+// stageEmitsFindings reports whether an asset_discovered batch stage may create
+// findings. The nuclei-network detection pass is backfill-only (vulns are
+// P2/#377), so it never does — even if a CVE blob leaks into a batch.
+func stageEmitsFindings(stage string) bool {
+	return stage != stageNucleiNetwork
+}
+
 func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.Dispatcher, sched scheduler.Dispatcher, bus events.Bus, auditW audit.Writer, agentID string, payload json.RawMessage) {
 	var batch websocket.AssetDiscoveredPayload
 	if err := json.Unmarshal(payload, &batch); err != nil {
 		slog.Error("parsing asset_discovered payload", "agent_id", agentID, "error", err)
 		return
 	}
+	nucleiNetwork := batch.Stage == stageNucleiNetwork
 	scan, err := s.GetScanByID(ctx, batch.ScanID)
 	if err != nil || scan == nil {
 		slog.Error("loading discovery scan", "scan_id", batch.ScanID, "error", err)
@@ -688,6 +701,9 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 			Version:         a.Version,
 			Technologies:    a.Technologies,
 			AllowlistStatus: awStatus,
+			// nuclei-network is a best-effort detection backfill: never
+			// overwrite httpx's richer fingerprint or a known label (ADR 019 P1).
+			FillOnly: nucleiNetwork,
 		})
 		if err != nil {
 			slog.Error("upserting asset endpoint",
@@ -698,7 +714,12 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 		if err := s.AppendAssetEvents(tctx, events); err != nil {
 			slog.Error("appending asset events", "endpoint", ep.ID, "error", err)
 		}
-		ingestNucleiFindings(tctx, s, scan.TenantID, scan.ID, ep.ID, a.CVEs)
+		// ADR 019 P1: the nuclei-network detection pass NEVER creates findings
+		// (vulns are P2/#377) — guard against any CVE blob leaking into a
+		// detection batch.
+		if stageEmitsFindings(batch.Stage) {
+			ingestNucleiFindings(tctx, s, scan.TenantID, scan.ID, ep.ID, a.CVEs)
+		}
 		runRuleActions(tctx, s, notifier, sched, auditW, activeRules, asset, ep)
 	}
 }
