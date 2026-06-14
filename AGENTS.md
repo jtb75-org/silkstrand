@@ -48,9 +48,17 @@ PR keeps review tractable.
 
 ## Environment gotchas (homelab)
 
-- **kubectl LAN routing drops** when colima/Docker hijacks the route to the homelab
-  (`no route to host 192.168.0.210:6443`). A reboot clears it. Do kubectl work
-  **before** starting Docker; don't restart colima in `--network-mode bridged`.
+- **`kubectl` "no route to host 192.168.0.210:6443" — usually macOS Local Network
+  Privacy** (confirmed 2026-06-14), not a route hijack. Every Homebrew/third-party
+  binary (kubectl, brew `python3`, helm…) gets `EHOSTUNREACH` to the homelab LAN when
+  the terminal app (**Ghostty**) lacks Local Network permission; Apple-signed tools
+  (`ping`/`nc`/`curl`) are exempt, so **ping/nc work while kubectl doesn't**. **Diagnose:**
+  if `nc -z 192.168.0.210 6443` succeeds but `kubectl` says no-route → it's this. **Fix:**
+  System Settings → Privacy & Security → Local Network → enable **Ghostty** (or click the
+  allow popup). A reboot "fixes" it only by re-triggering that prompt.
+- **Less common: a real colima/Docker route hijack** — if colima is actually running
+  (esp. `--network-mode bridged`) it can shadow the LAN route. Then `nc`/`ping` also fail.
+  Do kubectl work before starting Docker; reboot or stop colima clears it.
 - **Argo CD git cache can go stale** and report `Synced/Healthy` against an old
   revision. If a green build didn't roll out, **hard-refresh** the Argo app rather
   than assuming the deploy failed. (Also noted in CLAUDE.md.)
