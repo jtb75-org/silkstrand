@@ -306,6 +306,12 @@ type UpsertAssetEndpointInput struct {
 	Version         string
 	Technologies    json.RawMessage
 	AllowlistStatus *string
+	// FillOnly flips service/version to existing-wins (backfill): a present
+	// value is never overwritten, only NULLs are filled — and each field is
+	// independent. Used by the nuclei-network detection stage so httpx's richer
+	// fingerprint and any already-known label win (ADR 019 P1). Default false =
+	// incoming-wins (httpx/naabu paths).
+	FillOnly bool
 }
 
 // DiscoverySourceInput records provenance for a single discovery event

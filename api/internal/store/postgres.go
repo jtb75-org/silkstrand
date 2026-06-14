@@ -1867,14 +1867,27 @@ func (s *PostgresStore) UpsertAssetEndpoint(ctx context.Context, in UpsertAssetE
 		v := in.Version
 		ver = &v
 	}
+	// Default = incoming-wins (httpx/naabu). FillOnly = existing-wins backfill
+	// (nuclei-network): never overwrite a known service/version/technologies,
+	// fill NULLs only; service and version coalesce independently (ADR 019 P1).
+	// nuclei-network carries no technologies, so under FillOnly keep the
+	// existing ones rather than let the default '[]' wipe httpx's web tech.
+	serviceSet := "service = COALESCE(EXCLUDED.service, asset_endpoints.service)"
+	versionSet := "version = COALESCE(EXCLUDED.version, asset_endpoints.version)"
+	techSet := "technologies = EXCLUDED.technologies"
+	if in.FillOnly {
+		serviceSet = "service = COALESCE(asset_endpoints.service, EXCLUDED.service)"
+		versionSet = "version = COALESCE(asset_endpoints.version, EXCLUDED.version)"
+		techSet = "technologies = asset_endpoints.technologies"
+	}
 	var ae model.AssetEndpoint
 	err := s.db.QueryRowContext(ctx,
 		`INSERT INTO asset_endpoints (asset_id, port, protocol, service, version, technologies, allowlist_status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (asset_id, port, protocol) DO UPDATE SET
-		   service = COALESCE(EXCLUDED.service, asset_endpoints.service),
-		   version = COALESCE(EXCLUDED.version, asset_endpoints.version),
-		   technologies = EXCLUDED.technologies,
+		   `+serviceSet+`,
+		   `+versionSet+`,
+		   `+techSet+`,
 		   allowlist_status = COALESCE(EXCLUDED.allowlist_status, asset_endpoints.allowlist_status),
 		   last_seen = NOW(),
 		   updated_at = NOW()
