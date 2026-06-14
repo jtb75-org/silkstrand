@@ -885,6 +885,17 @@ export const publishProfile = (id: string) =>
 
 // ─── ADR 005 — Audit events ─────────────────────────────────────────────────
 
+// Known payload keys enriched server-side (ADR 005 Addendum): request-scoped
+// ip/user_agent/actor_email + per-site resource_label. The index signature keeps
+// arbitrary per-event keys (type, name, version, …) accessible.
+export interface AuditEventPayload {
+  ip?: string;
+  user_agent?: string;
+  actor_email?: string;
+  resource_label?: string;
+  [key: string]: unknown;
+}
+
 export interface AuditEvent {
   id: string;
   tenant_id: string;
@@ -894,7 +905,7 @@ export interface AuditEvent {
   actor_id?: string;
   resource_type?: string;
   resource_id?: string;
-  payload: Record<string, unknown>;
+  payload: AuditEventPayload;
 }
 
 export interface AuditEventsResponse {
