@@ -53,7 +53,11 @@ type DiscoveryConfig struct {
 	// (naabu → nuclei-network → httpx) that backfills service/version for
 	// non-web ports. Default on; P2 depth-gating will toggle it per tier.
 	IncludeNucleiNetwork bool `json:"include_nuclei_network"`
-	BatchSize            int  `json:"batch_size,omitempty"`
+	// IncludeNucleiNetworkVulns runs the ADR 019 P2 curated network-vuln pass
+	// (#377) → network_vuln findings. Default OFF (opt-in until the ADR-017
+	// depth selector flips it per tier); gated, not always-on, per D4.
+	IncludeNucleiNetworkVulns bool `json:"include_nuclei_network_vulns"`
+	BatchSize                 int  `json:"batch_size,omitempty"`
 }
 
 // PipelineRequest packages everything the recon runner needs.
@@ -147,6 +151,13 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	excluded := map[string]struct{}{} // "ip:port" → don't send to httpx
 	if cfg.IncludeNucleiNetwork {
 		runNucleiNetworkStage(ctx, req, findings, isHostname, now, cfg.BatchSize, excluded)
+	}
+
+	// Stage 1.6: nuclei-network vuln pass (ADR 019 P2 / #377). Opt-in; a second
+	// curated invocation over the same host:ports → network_vuln findings. Runs
+	// sequentially after detection so it doesn't stack on the nuclei-HTTP peak.
+	if cfg.IncludeNucleiNetworkVulns {
+		runNucleiNetworkVulnStage(ctx, req, findings, isHostname, now, cfg.BatchSize)
 	}
 
 	if !cfg.IncludeHTTPX {

@@ -28,6 +28,26 @@ func dirExists(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
+// buildHostPortInputs turns naabu findings into nuclei stdin host:port lines
+// (hostname targets probed BY NAME, like httpx) plus a map from each line back
+// to its NaabuFinding, so a stage can persist using naabu's IP identity rather
+// than whatever nuclei echoes in matched-at. Shared by the detection and vuln
+// sub-passes (ADR 019 P1/P2).
+func buildHostPortInputs(findings []NaabuFinding, isHostname bool, target string) ([]string, map[string]NaabuFinding) {
+	inputs := make([]string, 0, len(findings))
+	byHostPort := make(map[string]NaabuFinding, len(findings))
+	for _, f := range findings {
+		host := f.IP
+		if isHostname {
+			host = target
+		}
+		hp := fmt.Sprintf("%s:%d", host, f.Port)
+		inputs = append(inputs, hp)
+		byHostPort[hp] = f
+	}
+	return inputs, byHostPort
+}
+
 // ADR 019 P1 — nuclei-network service detection. A separate sequential pass
 // over naabu's open host:port pairs using nuclei's `network` protocol detection
 // templates (`network/detection/`). It backfills asset_endpoints.service +
@@ -212,17 +232,7 @@ func runNucleiNetworkStage(ctx context.Context, req PipelineRequest, findings []
 
 	// host:port inputs (probe hostnames BY NAME, like httpx); map matched-at
 	// back to the originating finding so backfill keeps naabu's IP identity.
-	inputs := make([]string, 0, len(findings))
-	byHostPort := make(map[string]NaabuFinding, len(findings))
-	for _, f := range findings {
-		host := f.IP
-		if isHostname {
-			host = req.TargetIdentifier
-		}
-		hp := fmt.Sprintf("%s:%d", host, f.Port)
-		inputs = append(inputs, hp)
-		byHostPort[hp] = f
-	}
+	inputs, byHostPort := buildHostPortInputs(findings, isHostname, req.TargetIdentifier)
 
 	var mu sync.Mutex
 	hitsByPort := map[string][]NucleiNetworkHit{}
