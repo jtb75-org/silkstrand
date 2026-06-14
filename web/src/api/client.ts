@@ -3,6 +3,7 @@ import type {
   CreateTargetRequest,
   UpdateTargetRequest,
   Scan,
+  ScanDetail,
   Agent,
   CreateAgentResponse,
   AgentDownloads,
@@ -121,6 +122,10 @@ export const createScan = (
     }),
   });
 export const getScan = (id: string) => request<Scan>(`/api/v1/scans/${id}`);
+// #387: same endpoint, richer type — the chunk rollup + list for the live
+// Scan Activity drawer's initial state.
+export const getScanDetail = (id: string) =>
+  request<ScanDetail>(`/api/v1/scans/${id}`);
 export const deleteScan = (id: string) =>
   request<void>(`/api/v1/scans/${id}`, { method: 'DELETE' });
 export const listBundles = () => request<Bundle[]>('/api/v1/bundles');
