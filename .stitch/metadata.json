@@ -1,0 +1,37 @@
+{
+  "projectId": "18074925412578168001",
+  "name": "projects/18074925412578168001",
+  "title": "SilkStrand",
+  "deviceType": "DESKTOP",
+  "designSystem": {
+    "displayName": "SilkStrand",
+    "assetId": "9830d61da42b40f7ac87ff4c46558986",
+    "name": "assets/9830d61da42b40f7ac87ff4c46558986",
+    "version": "1",
+    "source": ".stitch/DESIGN.md",
+    "summary": "Quietly-powerful enterprise control plane. Brand blue #3b82f6, near-white surfaces, cool slate neutrals, Inter + JetBrains Mono, 4px grid, 42px table rows, light-canonical (dark defined but inert).",
+    "primaryColor": "#3b82f6",
+    "fonts": ["Inter", "JetBrains Mono"]
+  },
+  "screens": [
+    {
+      "id": "11844429738228722846",
+      "sourceScreen": "projects/18074925412578168001/screens/11844429738228722846",
+      "role": "design-system-source (uploaded DESIGN.md)"
+    },
+    {
+      "id": "ab7e9b23303b4ec3b9590824f72644bf",
+      "title": "Assets Inventory",
+      "deviceType": "DESKTOP",
+      "role": "sample / design-system sanity-check (desktop Assets table)",
+      "assets": [".stitch/designs/assets-desktop.png", ".stitch/designs/assets-desktop.html"]
+    },
+    {
+      "id": "f662308924ad4de3be7a0ebb5d06d6a1",
+      "title": "Dashboard (Compliance Overview)",
+      "deviceType": "MOBILE",
+      "role": "first sample (came out mobile; superseded by the desktop Assets screen)"
+    }
+  ],
+  "notes": "Design system created via stitch-design:manage-design-system from .stitch/DESIGN.md. Stitch derived a fuller MD3 tonal palette around the brand blue; overridePrimaryColor/customColor preserve #3b82f6 and the custom named tokens (success/warning/danger/info, surface-subtle, border-*, body-bg) carried through."
+}
