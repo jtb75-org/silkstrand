@@ -194,7 +194,7 @@ func (h *ScanDefinitionsHandler) Create(w http.ResponseWriter, r *http.Request) 
 		TenantID: out.TenantID, EventType: audit.EventScanDefCreated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "scan_definition", ResourceID: out.ID,
-		Payload: map[string]any{"name": out.Name, "kind": out.Kind},
+		Payload: map[string]any{"name": out.Name, "kind": out.Kind, "resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -242,6 +242,7 @@ func (h *ScanDefinitionsHandler) Update(w http.ResponseWriter, r *http.Request) 
 		TenantID: out.TenantID, EventType: audit.EventScanDefUpdated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "scan_definition", ResourceID: out.ID,
+		Payload: map[string]any{"resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusOK, out)
 }
@@ -292,7 +293,7 @@ func (h *ScanDefinitionsHandler) Execute(w http.ResponseWriter, r *http.Request)
 		TenantID: def.TenantID, EventType: audit.EventScanDefExecuted,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "scan_definition", ResourceID: id,
-		Payload: map[string]any{"name": def.Name},
+		Payload: map[string]any{"name": def.Name, "resource_label": def.Name},
 	})
 	w.WriteHeader(http.StatusAccepted)
 }

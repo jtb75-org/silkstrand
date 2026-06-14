@@ -72,7 +72,11 @@ func NewPostgresWriter(db *sql.DB) *PostgresWriter {
 	return w
 }
 
-func (w *PostgresWriter) Emit(_ context.Context, e Event) {
+func (w *PostgresWriter) Emit(ctx context.Context, e Event) {
+	// Merge request-scoped metadata (ip/user_agent/actor_email) from ctx into
+	// the payload here, in the caller's goroutine — the background flusher runs
+	// on a detached context and would not see these values.
+	e = enrich(ctx, e)
 	select {
 	case w.ch <- e:
 	default:

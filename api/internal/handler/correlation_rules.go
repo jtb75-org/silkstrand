@@ -113,7 +113,7 @@ func (h *CorrelationRulesHandler) Create(w http.ResponseWriter, r *http.Request)
 		TenantID: out.TenantID, EventType: audit.EventRuleCreated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "rule", ResourceID: out.ID,
-		Payload: map[string]any{"name": out.Name, "trigger": out.Trigger},
+		Payload: map[string]any{"name": out.Name, "trigger": out.Trigger, "resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -162,7 +162,7 @@ func (h *CorrelationRulesHandler) Update(w http.ResponseWriter, r *http.Request)
 		TenantID: out.TenantID, EventType: audit.EventRuleUpdated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "rule", ResourceID: out.ID,
-		Payload: map[string]any{"name": out.Name},
+		Payload: map[string]any{"name": out.Name, "resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusOK, out)
 }

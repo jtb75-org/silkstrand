@@ -113,7 +113,7 @@ func (h *CollectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		TenantID: out.TenantID, EventType: audit.EventCollectionCreated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "collection", ResourceID: out.ID,
-		Payload: map[string]any{"name": out.Name, "scope": out.Scope},
+		Payload: map[string]any{"name": out.Name, "scope": out.Scope, "resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -163,6 +163,7 @@ func (h *CollectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		TenantID: out.TenantID, EventType: audit.EventCollectionUpdated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "collection", ResourceID: out.ID,
+		Payload: map[string]any{"resource_label": out.Name},
 	})
 	writeJSON(w, http.StatusOK, out)
 }
