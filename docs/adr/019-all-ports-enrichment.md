@@ -41,69 +41,89 @@ the depth/resource controls the OOM work taught us to bake in up front.
   `technologies` (ADR 006) — waiting to be backfilled.
 - **The pipeline seams exist.** `recon/pipeline.go` stages + `recon/nuclei.go`'s
   `runNuclei(urls)` — a sibling `runNucleiNetwork(hostPorts)` slots in (ADR 009 D5/D6).
-- **ADR 009 did the hard design** — stage placement, template selection, the
-  service-name map, httpx-input narrowing, allowlist interaction. Ratified below.
 
 ## Decision
 
-### D1. One `nuclei-network` stage over naabu's open ports (ratify ADR 009)
+### D1. One logical `nuclei-network` stage over naabu's open ports (ratify ADR 009)
 
 Between naabu and httpx, run nuclei against the `host:port` list (not URLs) using
-the **network** template protocol. This single stage does **both** jobs:
+the **network** template protocol. One logical stage (one progress unit, one
+`stage=nuclei-network` batch stream), reusing the nuclei binary + the pinned
+template bundle — no new tool, no separate download (ADR 009 D1).
 
 ```
 naabu → nuclei-network (ALL ports) → httpx (HTTP ports only) → nuclei-HTTP (URLs)
 ```
 
-It reuses the nuclei binary + the pinned template bundle (no new tool, no separate
-download), per ADR 009 D1.
+### D2. Two sub-passes within the stage — detection and vuln are NOT one invocation
 
-### D2. Broader template selection than ADR 009 — detection **and** vulns (#377)
+The `network/` tree is heterogeneous: `network/detection/` templates are almost
+entirely `severity=info`, while the rest (`cves`, `exposures`, `misconfig`,
+`default-login`, `enumeration`, `c2`, `honeypot`, …) span all severities and very
+different risk/parsing/persistence profiles. So a single invocation with a global
+`-severity` filter is wrong — `-severity medium+` would drop *all* service
+detection. The stage therefore runs **two nuclei invocations** over the same
+host:port list:
 
-ADR 009 scoped to `network/detection/` (service ID only). This ADR widens it to the
-`network/` tree — **detection** templates (service identification) **plus** the
-network **vuln** templates (#377): exposed services, default credentials, weak
-TLS/ciphers, info leaks. Detection findings → service/version backfill (D3); vuln
-findings → `network_vuln` findings. Same pass, one template root, severity-filtered
-by depth (D4).
+- **Detection sub-pass** — `-t network/detection/`, **no global severity filter**
+  (info allowed). Output → service/version backfill (D3). **Never** written as findings.
+- **Vuln sub-pass (#377)** — a **curated** set of network vuln template paths/tags
+  (D4's category allowlist), severity/category-filtered by tier. Output →
+  `network_vuln` findings.
 
-### D3. Outputs — backfill the tech map + emit vulns
+One logical stage for pipeline shape + progress; two passes because the outputs are
+handled differently.
 
-- **Service/version map:** detection hits backfill `asset_endpoints.service` (from
-  a static template→service map: `mssql-detect → mssql`, `ssh-detect → ssh`, …) and
-  `version` (from `extracted-results`), per ADR 009 D3. Backfill only when `service`
-  is NULL — httpx's later HTTP fingerprint wins for web ports.
-- **Vulns:** network vuln hits → `findings` (`source_kind=network_vuln`,
-  `source=nuclei-network`). Version on the endpoint makes these **exploitability-aware**
-  (ADR 012) — a CVE tied to "MySQL 8.0.32", not just a banner.
-- **httpx narrowing (ADR 009 D4):** ports identified as non-HTTP are excluded from
-  httpx (faster, more accurate); unmatched ports still fall through to httpx.
+### D3. Outputs — detection backfills, vuln becomes findings, httpx stays authoritative for web
 
-### D4. Depth-gated (ADR 017 alignment) — the runtime/memory control
+- **Detection → `service`/`version` backfill (NOT findings).** This explicitly
+  corrects ADR 009 D3's ambiguity: a pure service-ID hit must not create a
+  `network_vuln` finding.
+  - `service` from a static `template-id → service` map (`mssql-detect → mssql`,
+    `ssh-detect → ssh`, `postgres-detect → postgresql`, …).
+  - **httpx-precedence fix** (nuclei-network runs *before* httpx): an HTTP-family
+    detection hit must **not persist** `service` — it is used **only** to route the
+    port into httpx, so httpx's richer HTTP fingerprint sets the web service. Only
+    **non-HTTP** detection hits backfill `service`/`version`. Net: httpx owns web
+    ports, nuclei-network owns non-web ports — no first-writer-wins collision.
+  - `version`: set only when currently NULL; normalize empty-string → NULL (never
+    persist an empty version).
+- **Vuln → `network_vuln` findings** (`source=nuclei-network`). Endpoint `version`
+  makes these exploitability-aware (ADR 012) — opportunistically (see D5).
 
-The all-ports pass adds nuclei load on top of the web pass we just OOM-fixed at 2Gi.
-So it is **gated by depth tier**, not always-on:
+### D4. Depth-gated with CONCRETE per-tier limits (the real OOM bound)
 
-| Tier | nuclei-network |
-|---|---|
-| **Quick** | off (today's web-only chain) |
-| **Standard** | detection + low-risk vuln templates, severity ≥ medium |
-| **Deep** | full `network/` set, all severities |
+The all-ports passes add nuclei load on top of the web pass we just OOM-fixed at
+2Gi. Memory is **not** bounded by runtime alone, so each depth tier resolves
+server-side into explicit nuclei limits — not just a severity:
 
-Tier resolves server-side into the template/severity flags + caps, clamped to the
-per-chunk runtime budget (ADR 017 D4 / the chunk lease).
+| Tier | detection | vuln templates | limits |
+|---|---|---|---|
+| **Quick** | off | off | — (today's web-only chain) |
+| **Standard** | on (info) | **curated category allowlist** — e.g. `exposures`, `misconfig`, weak-TLS; **excludes** active `default-login`, `enumeration`, `c2`, `honeypot`, `javascript` | per-chunk target cap · `-c` concurrency · bulk-size · rate-limit · timeout/retries · max-output cap |
+| **Deep** | on | broader `network/` set **minus** the same active/intrusive categories | higher caps, still bounded |
 
-### D5. Tool choice — `nuclei-network` now, nmap `-sV` deferred
+"Full `network/` set" is explicitly **not** all categories — intrusive/active
+templates (default-login, enumeration, c2, honeypot, javascript) stay excluded
+unless a future tier deliberately opts in. Memory is bounded by the **target cap +
+concurrency + bulk-size + max-output**, validated against the agent memory budget
+the same way the 2Gi fix was (no OOM under the all-ports load). Standard's vuln set
+is a **curated allowlist**, not "severity ≥ medium" — severity alone is not a risk
+model.
 
-**Use nuclei-network, not nmap, for the base capability.** Rationale: it's already
-in the stack (Principle #8 — minimal deps, single-person sustainability), reuses the
-pinned template bundle, and covers the common services. nmap `-sV` is *more*
-accurate (comprehensive probe DB, arbitrary-protocol version detection) but is a
-heavy new dependency (~10–20 MB binary + data, different vendor, slower, more
-intrusive). **Defer nmap `-sV` as a Deep-tier accuracy enhancement** — add it only
-if nuclei-network's service/version coverage proves insufficient in practice. PD's
-`tlsx` is a lighter, in-stack complement for TLS-port fingerprinting if richer TLS
-data is wanted before nmap.
+### D5. Tool choice — nuclei-network now, nmap deferred (with an honest coverage caveat)
+
+Use nuclei-network for the base: it's already in the stack (Principle #8 — minimal
+deps, single-person sustainability), reuses the pinned bundle, and gives useful
+service labels + network vuln coverage. **Stated plainly: nuclei-network's
+service/version coverage is best-effort and materially thinner than nmap `-sV`** —
+good labels for *common* services, *opportunistic* version. So:
+
+- **P1 success** = common services labeled well enough to build collections;
+  reliable version-aware exploitability is opportunistic until P3.
+- **P3 trigger** = if reliable arbitrary-protocol *version* detection becomes a hard
+  product requirement, `nmap -sV` moves into **Deep** (not base). PD's `tlsx` is a
+  lighter, in-stack TLS-port complement to consider before nmap.
 
 ### D6. Principles unchanged
 
@@ -113,32 +133,40 @@ recon stage (ADR 009 D9). No new runtime tool in the base design.
 
 ## Consequences
 
-- **The tech map fills in** — non-web `service`/`version` populate; service-based
-  collections and version-aware findings become possible.
-- **Non-web vuln coverage** (#377) — exposed Redis, weak TLS, default creds, etc.
-- **More nuclei work** — bounded by D4's depth gating + the chunk runtime budget;
-  Standard stays close to today, Deep is opt-in. Validate the memory budget the same
-  way the 2Gi fix was validated (no OOM under the all-ports load).
+- **The tech map fills in** — non-web `service`/`version` populate (best-effort per
+  D5); service-based collections and version-aware findings become possible.
+- **Non-web vuln coverage** (#377) — exposed Redis, weak TLS, etc., from the curated
+  vuln sub-pass.
+- **Two nuclei passes per chunk** — bounded by D4's explicit caps + category
+  allowlist + depth gating; Standard stays close to today, Deep is opt-in. Validate
+  the memory budget (no OOM) before shipping each tier.
 - **Still zero new dependencies** in the base — nuclei + the existing bundle.
-- **httpx gets faster** (narrowed input) — partial offset to the new stage's cost.
+- **httpx gets faster** (narrowed input) — partial offset to the new passes' cost.
 
 ## Resolved decisions
 
-- **Why supersede ADR 009, not amend?** 009 was Proposed-but-unbuilt and scoped to
-  detection-only; this folds in #377 vulns + depth-gating + the tool decision into
-  one current source of truth. 009's stage design is ratified, not discarded.
-- **Why nuclei-network over nmap?** Minimal-deps + already-in-stack beats nmap's
-  extra accuracy for the base; nmap is the deferred Deep enhancement (D5).
-- **Why one stage for detection + vulns?** Same input (host:port), same binary,
-  same template tree — splitting them would double the nuclei passes.
-- **Why depth-gate?** The OOM lesson: don't add unbounded nuclei load. Standard
-  stays cheap; Deep is explicit.
+- **Why two sub-passes, not one invocation?** Detection templates are ~all `info`;
+  a global severity filter that admits vulns would exclude detection (D2).
+- **Why don't detection hits create findings?** They're service-ID, not vulns —
+  corrects ADR 009 D3. Detection → backfill; vuln → findings only.
+- **Why does httpx win for web ports?** nuclei-network runs first, so persisting an
+  HTTP-family service would block httpx's richer fingerprint — HTTP-family detection
+  hits route to httpx instead of persisting (D3).
+- **Why supersede ADR 009?** 009 was Proposed-but-unbuilt and detection-only; 019
+  folds in #377 vulns, depth-gating, the tool decision, and fixes the precedence +
+  severity issues into one current source of truth.
+- **Why nuclei-network over nmap?** Minimal-deps + already-in-stack for the base;
+  nmap is the deferred Deep enhancement, with explicit coverage caveats (D5).
+- **Why category allowlist, not severity, for the OOM/risk bound?** Severity isn't a
+  risk model and doesn't bound memory; explicit category + count + concurrency caps do (D4).
 
 ## Scope / phasing
 
-- **P1 — service detection** (ADR 009's core): `runNucleiNetwork` + service/version
-  backfill + httpx narrowing. Fills the empty columns; immediate operator value.
-- **P2 — network vulns** (#377): widen templates to the vuln set, emit `network_vuln`
-  findings, wire depth-gating (D4).
-- **P3 — nmap `-sV` Deep enhancement** (deferred): only if P1/P2 coverage proves
-  insufficient; gated to Deep, validated against the memory budget.
+- **P1 — service detection** (ADR 009's core): the **detection sub-pass** +
+  service/version backfill (non-HTTP only) + httpx narrowing. Fills the empty
+  columns; immediate operator value. No vuln pass, no depth logic yet — but the
+  `IncludeNucleiNetwork` directive flag goes in, wireable.
+- **P2 — network vulns** (#377): the curated **vuln sub-pass** → `network_vuln`
+  findings + the depth-tier gating/limits (D4).
+- **P3 — nmap `-sV` Deep enhancement** (deferred): only if P1/P2 version coverage
+  proves insufficient against D5's success criteria; gated to Deep, memory-validated.
