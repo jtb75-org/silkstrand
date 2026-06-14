@@ -1,3 +1,65 @@
+/* ---------------------------------------------------------------------------
+   Design-system tokens (ADR 018 / design-system.md §3). Light is the default on
+   :root; dark values live under [data-theme="dark"], inert until a theme switch
+   is wired (§9 Phase 2). New code uses var(--ss-*); existing code is untouched.
+--------------------------------------------------------------------------- */
+:root {
+  /* Accent — brand blue (shared across themes) */
+  --ss-accent-primary: #3b82f6;
+  --ss-accent-hover:   #2563eb;
+  --ss-accent-subtle:  #1d4ed8;
+  --ss-accent-soft:    #93c5fd;
+  /* Status (shared hue) */
+  --ss-success: #10b981;
+  --ss-warning: #f59e0b;
+  --ss-danger:  #ef4444;
+  --ss-info:    #06b6d4;
+  /* Surfaces / text / borders — light (default) */
+  --ss-bg-base:    #ffffff;
+  --ss-bg-surface: #ffffff;
+  --ss-bg-subtle:  #f9fafb;
+  --ss-bg-raised:  #f3f4f6;
+  --ss-text-primary:   #111827;
+  --ss-text-secondary: #374151;
+  --ss-text-muted:     #6b7280;
+  --ss-text-on-accent: #ffffff;
+  --ss-border-subtle:  #e5e7eb;
+  --ss-border-default: #d1d5db;
+  --ss-border-strong:  #9ca3af;
+  --ss-success-bg: #d1fae5;
+  --ss-warning-bg: #fef3c7;
+  --ss-danger-bg:  #fee2e2;
+  --ss-info-bg:    #cffafe;
+  /* Spacing — 4px grid */
+  --ss-space-xs: 4px;  --ss-space-sm: 8px;  --ss-space-md: 12px;
+  --ss-space-lg: 16px; --ss-space-xl: 24px; --ss-space-2xl: 32px; --ss-space-3xl: 48px;
+  /* Radius */
+  --ss-radius-sm: 4px; --ss-radius-md: 6px; --ss-radius-lg: 8px; --ss-radius-full: 999px;
+  /* Shadow */
+  --ss-shadow-sm: 0 1px 2px rgba(0,0,0,.05);
+  --ss-shadow-md: 0 4px 6px rgba(0,0,0,.07);
+  --ss-shadow-lg: 0 10px 15px rgba(0,0,0,.10);
+  /* Motion */
+  --ss-transition-fast: 120ms ease;
+  --ss-transition-base: 180ms ease;
+}
+:root[data-theme="dark"] {
+  --ss-bg-base:    #0f172a;
+  --ss-bg-surface: #1f2937;
+  --ss-bg-subtle:  #111827;
+  --ss-bg-raised:  #374151;
+  --ss-text-primary:   #f9fafb;
+  --ss-text-secondary: #d1d5db;
+  --ss-text-muted:     #9ca3af;
+  --ss-border-subtle:  #1f2937;
+  --ss-border-default: #374151;
+  --ss-border-strong:  #4b5563;
+  --ss-success-bg: rgba(16,185,129,.15);
+  --ss-warning-bg: rgba(245,158,11,.15);
+  --ss-danger-bg:  rgba(239,68,68,.15);
+  --ss-info-bg:    rgba(6,182,212,.15);
+}
+
 *,
 *::before,
 *::after {
@@ -677,6 +739,44 @@ a:hover {
   height: 560px;
   display: flex;
 }
+
+/* --- #387 Scan Activity live progress drawer --- */
+.ss-progress {
+  height: 8px;
+  background: #eceff1;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ss-progress-fill {
+  height: 100%;
+  background: #1976d2;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.ss-progress-fill.failed { background: #d32f2f; }
+.ss-chunk {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.ss-chunk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.ss-stage-row { display: flex; gap: 6px; margin-top: 6px; }
+.ss-stage {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #eceff1;
+  color: #607d8b;
+}
+.ss-stage.active { background: #bbdefb; color: #0d47a1; font-weight: 600; }
+.ss-stage.done { background: #c8e6c9; color: #1b5e20; }
+.ss-stream-pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
 
 /* --- ADR 003 R1b Assets page suggestions --- */
 .suggestion-section { background: #fff8e1; padding: 12px; border-radius: 4px; }

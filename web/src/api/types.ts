@@ -54,6 +54,67 @@ export interface Scan {
   summary?: ScanSummary;
 }
 
+// #387: per-chunk row in the scan-detail response + the SSE stream. A chunked
+// discovery scan splits its CIDR into these; non-chunked/compliance scans have
+// none (an implicit single unit / no chunk model — see ScanDetail rollup).
+export interface ScanChunk {
+  id: string;
+  scan_id: string;
+  chunk_index: number;
+  target_identifier: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  current_stage?: string; // naabu | httpx | nuclei (last reported)
+  assets_found: number;
+  hosts_scanned: number;
+  error_message?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+// ScanDetail is GET /api/v1/scans/{id} (#387): the Scan plus the chunk rollup +
+// list that seed the live Activity drawer before SSE events arrive.
+export interface ScanDetail extends Scan {
+  chunks_total: number;
+  chunks_completed: number;
+  chunks_failed: number;
+  chunks: ScanChunk[];
+}
+
+// ScanProgressChunk is the per-chunk delta on a scan_progress event. The UI
+// keys on chunk_id; chunk_index/target_identifier may be absent on live events
+// (present in the REST snapshot). Counts are authoritative only on
+// chunk_completed (nil/absent elsewhere).
+export interface ScanProgressChunk {
+  chunk_id?: string;
+  chunk_index?: number;
+  target_identifier?: string;
+  status?: string;
+  current_stage?: string;
+  hosts_scanned?: number;
+  assets_found?: number;
+  error_message?: string;
+}
+
+// ScanProgressPayload is the payload of a "scan_progress" SSE event (#387).
+// One Kind covers every scan type via `event`; `chunk` is set only for
+// chunk-scoped events.
+export interface ScanProgressPayload {
+  scan_id: string;
+  event:
+    | 'scan_started'
+    | 'chunk_started'
+    | 'stage_progress'
+    | 'chunk_completed'
+    | 'chunk_failed'
+    | 'scan_completed'
+    | 'scan_failed';
+  status: 'queued' | 'pending' | 'running' | 'completed' | 'failed';
+  chunks_total: number;
+  chunks_completed: number;
+  chunks_failed: number;
+  chunk?: ScanProgressChunk;
+}
+
 // ADR 003 R1a — Asset / discovery types.
 export type AssetSource = 'manual' | 'discovered';
 

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
 import { listScans, listScanDefinitions } from '../api/client';
 import type { Scan, ScanDefinition } from '../api/types';
+import ScanActivityDrawer from '../components/ScanActivityDrawer';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -12,7 +12,7 @@ function StatusBadge({ status }: { status: string }) {
 // the `scans` feed — both scheduled and ad-hoc — filterable by
 // scan_definition_id / status / date range per `docs/plans/ui-shape.md`.
 export default function ScanActivity() {
-  const navigate = useNavigate();
+  const [openScanId, setOpenScanId] = useState<string | null>(null);
   const [defId, setDefId] = useState('');
   const [status, setStatus] = useState('');
   const [since, setSince] = useState('');
@@ -122,7 +122,7 @@ export default function ScanActivity() {
               <tr
                 key={s.id}
                 className="clickable-row"
-                onClick={() => navigate(`/scans/${s.id}`)}
+                onClick={() => setOpenScanId(s.id)}
               >
                 <td><StatusBadge status={s.status} /></td>
                 <td>{s.scan_type ?? 'compliance'}</td>
@@ -134,6 +134,10 @@ export default function ScanActivity() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {openScanId && (
+        <ScanActivityDrawer scanId={openScanId} onClose={() => setOpenScanId(null)} />
       )}
     </div>
   );
