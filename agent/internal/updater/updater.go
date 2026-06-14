@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/jtb75/silkstrand/agent/internal/nettls"
@@ -92,16 +93,49 @@ func Apply(baseURL, version, expectedSHA256 string) error {
 }
 
 // InContainer returns true when the agent is running inside a container
-// environment (Docker, Kubernetes). Upgrade-in-place doesn't make sense
-// there — the image is immutable.
+// environment (Docker, Kubernetes, podman). Upgrade-in-place doesn't make
+// sense there — the image is immutable.
 func InContainer() bool {
-	if _, err := os.Stat("/.dockerenv"); err == nil {
+	return detectContainer(os.Getenv, fileExists, os.ReadFile)
+}
+
+// detectContainer is the testable core of InContainer. Its dependencies on the
+// environment, the filesystem, and file contents are injected so the detection
+// logic can be exercised without a real container. Detection is best-effort:
+// any read error simply falls through to the next signal, never an error.
+func detectContainer(getenv func(string) string, exists func(string) bool, read func(string) ([]byte, error)) bool {
+	// Primary k8s signal: the kubelet always injects this into every pod.
+	// It is present even on modern nodes (cgroup v2 unified hierarchy, systemd
+	// driver) where /proc/*/cgroup is a bare "0::/" with no container markers.
+	if getenv("KUBERNETES_SERVICE_HOST") != "" {
 		return true
 	}
-	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+	// Runtime markers: Docker writes /.dockerenv, podman writes /run/.containerenv.
+	if exists("/.dockerenv") || exists("/run/.containerenv") {
+		return true
+	}
+	// cgroup markers: v1 named hierarchies ("…/docker/…", "…/kubepods/…") and
+	// v2 unified paths ("0::/kubepods/…"). Check both PID 1 and self so we
+	// cover hosts where one is bare but the other carries the path.
+	//
+	// The substring match is intentionally broad and we deliberately do NOT
+	// tighten it to path-segment matching. in_container detection should err
+	// toward TRUE because the two failure directions are asymmetric:
+	//   - false negative (container seen as a binary) → the UI offers "Upgrade
+	//     in place", which silently fails on an immutable image. Harmful — it's
+	//     the exact bug this fix addresses.
+	//   - false positive (binary seen as a container) → the UI offers "Recreate
+	//     from image", at worst a redundant/no-op instruction. Harmless.
+	// So a rare false positive (e.g. a bare-metal cgroup path that happens to
+	// contain one of these substrings) is the acceptable, conservative trade.
+	for _, path := range []string{"/proc/1/cgroup", "/proc/self/cgroup"} {
+		b, err := read(path)
+		if err != nil {
+			continue
+		}
 		s := string(b)
 		for _, marker := range []string{"docker", "kubepods", "containerd"} {
-			if contains(s, marker) {
+			if strings.Contains(s, marker) {
 				return true
 			}
 		}
@@ -109,11 +143,8 @@ func InContainer() bool {
 	return false
 }
 
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
+// fileExists reports whether path exists (best-effort; any stat error is false).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
