@@ -1,0 +1,19 @@
+apiVersion: v2
+name: silkstrand-agent
+description: |
+  SilkStrand edge agent — runs CIS compliance + network discovery scans inside
+  a customer environment and streams structured results out over WSS. This chart
+  deploys the agent on Kubernetes; it self-bootstraps from an install token,
+  persists its identity across restarts, and is locked down with a scoped egress
+  NetworkPolicy.
+type: application
+# Chart version — bump on chart changes (independent of the agent appVersion).
+version: 0.1.0
+# Default agent image tag. Override image.tag in values to pin a release.
+appVersion: "v0.1.106"
+keywords: [security, compliance, cis, scanner, agent]
+home: https://silkstrand.io
+sources:
+  - https://github.com/jtb75-org/silkstrand
+maintainers:
+  - name: SilkStrand

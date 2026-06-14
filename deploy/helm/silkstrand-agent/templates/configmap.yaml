@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "silkstrand-agent.fullname" . }}-allowlist
+  labels:
+    {{- include "silkstrand-agent.labels" . | nindent 4 }}
+data:
+  scan-allowlist.yaml: |
+    allow:
+      {{- range .Values.allowlist.cidrs }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- with .Values.allowlist.deny }}
+    deny:
+      {{- range . }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    {{- with .Values.allowlist.rateLimitPps }}
+    rate_limit_pps: {{ . }}
+    {{- end }}
