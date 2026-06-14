@@ -46,14 +46,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $id := .Values.auth.agentId -}}
 {{- $key := .Values.auth.agentKey -}}
 {{- $pair := and $id $key -}}
+{{/* half-filled pair first, so the precise message wins over the generic one */}}
+{{- if or (and $id (not $key)) (and $key (not $id)) -}}
+{{- fail "silkstrand-agent: auth.agentId and auth.agentKey must be set together" -}}
+{{- end -}}
 {{- if and (not $tok) (not $pair) -}}
 {{- fail "silkstrand-agent: set auth.installToken OR (auth.agentId + auth.agentKey) OR auth.existingSecret" -}}
 {{- end -}}
 {{- if and $tok $pair -}}
 {{- fail "silkstrand-agent: set auth.installToken OR auth.agentId+agentKey, not both (explicit id/key would override the bootstrapped identity)" -}}
-{{- end -}}
-{{- if or (and $id (not $key)) (and $key (not $id)) -}}
-{{- fail "silkstrand-agent: auth.agentId and auth.agentKey must be set together" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
