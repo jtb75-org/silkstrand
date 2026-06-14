@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { ShieldAlert, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import {
   listFindings,
   suppressFinding,
@@ -12,6 +14,7 @@ import type {
   FindingStatus,
   Collection,
 } from '../api/types';
+import DataTable from '../components/DataTable';
 
 type Tab = 'vulnerabilities' | 'compliance';
 
@@ -27,6 +30,10 @@ const SOURCE_KINDS_BY_TAB: Record<Tab, FindingSourceKind[]> = {
   vulnerabilities: ['network_vuln'],
   compliance: ['bundle_compliance', 'network_compliance'],
 };
+
+// Severity sorts by risk rank, not alphabetically (critical > … > info).
+const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+const sevRank = (s?: string) => (s ? SEV_RANK[s.toLowerCase()] ?? 0 : 0);
 
 function SeverityBadge({ severity }: { severity?: string }) {
   if (!severity) return <span className="muted">—</span>;
@@ -81,13 +88,84 @@ export default function Findings() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['findings'] }),
   });
 
+  // Column defs are inline (cheap; data is the stable react-query result).
+  // Filtering stays server-side (the existing query params); TanStack adds the
+  // client-side column sorting the old table lacked.
+  const columns: ColumnDef<Finding>[] = [
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (f) => f.severity ?? '',
+      cell: ({ row }) => <SeverityBadge severity={row.original.severity} />,
+      sortingFn: (a, b) => sevRank(a.original.severity) - sevRank(b.original.severity),
+    },
+    { id: 'title', header: 'Title', accessorKey: 'title' },
+    {
+      id: 'source',
+      header: 'Source',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const f = row.original;
+        return <span title={f.source_kind}>{f.source}{f.source_id ? ` / ${f.source_id}` : ''}</span>;
+      },
+    },
+    { id: 'asset', header: 'Asset:Port', enableSorting: false, accessorFn: (f) => assetLabel(f) },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorKey: 'status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'last_seen',
+      header: 'Last Seen',
+      accessorFn: (f) => f.last_seen,
+      cell: ({ row }) => new Date(row.original.last_seen).toLocaleString(),
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const f = row.original;
+        return (
+          <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+            {f.status === 'open' && (
+              <button className="btn btn-sm" onClick={() => suppressMut.mutate(f.id)} disabled={suppressMut.isPending}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+                  <EyeOff size={14} /> Suppress
+                </span>
+              </button>
+            )}
+            {f.status === 'suppressed' && (
+              <button className="btn btn-sm" onClick={() => reopenMut.mutate(f.id)} disabled={reopenMut.isPending}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+                  <Eye size={14} /> Reopen
+                </span>
+              </button>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
     <div>
-      <div className="page-header">
-        <h1>Findings</h1>
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+        <ShieldAlert size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+        <h1 style={{ margin: 0 }}>Findings</h1>
       </div>
 
-      <div className="tabbar" style={{ display: 'flex', gap: 16, borderBottom: '1px solid #e5e7eb', marginBottom: 16 }}>
+      <div
+        className="tabbar"
+        style={{
+          display: 'flex',
+          gap: 'var(--ss-space-lg)',
+          borderBottom: '1px solid var(--ss-border-subtle)',
+          marginBottom: 'var(--ss-space-lg)',
+        }}
+      >
         {TABS.map((t) => (
           <button
             key={t.value}
@@ -95,11 +173,13 @@ export default function Findings() {
             style={{
               background: 'none',
               border: 'none',
-              padding: '8px 4px',
+              padding: 'var(--ss-space-sm) var(--ss-space-xs)',
               cursor: 'pointer',
               fontWeight: tab === t.value ? 600 : 400,
-              borderBottom: tab === t.value ? '2px solid #2563eb' : '2px solid transparent',
+              color: tab === t.value ? 'var(--ss-text-primary)' : 'var(--ss-text-secondary)',
+              borderBottom: tab === t.value ? '2px solid var(--ss-accent-hover)' : '2px solid transparent',
               marginBottom: -1,
+              transition: 'color var(--ss-transition-fast)',
             }}
           >
             {t.label}
@@ -107,7 +187,7 @@ export default function Findings() {
         ))}
       </div>
 
-      <div className="form-card" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      <div className="form-card" style={{ display: 'flex', gap: 'var(--ss-space-md)', flexWrap: 'wrap' }}>
         <div>
           <label htmlFor="f-sev" style={{ display: 'block', fontSize: 12 }}>Severity</label>
           <select id="f-sev" value={severity} onChange={(e) => setSeverity(e.target.value)}>
@@ -149,54 +229,19 @@ export default function Findings() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">Failed to load: {(error as Error).message}</p>}
-      {!isLoading && findings && findings.length === 0 && <p>No findings match.</p>}
+      {!isLoading && findings && findings.length === 0 && (
+        <div style={{ textAlign: 'center', padding: 'var(--ss-space-3xl)', color: 'var(--ss-text-muted)' }}>
+          <ShieldCheck size={40} style={{ color: 'var(--ss-success)' }} />
+          <p style={{ marginTop: 'var(--ss-space-sm)' }}>No findings match these filters.</p>
+        </div>
+      )}
 
       {findings && findings.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Severity</th>
-              <th>Title</th>
-              <th>Source</th>
-              <th>Asset:Port</th>
-              <th>Status</th>
-              <th>Last Seen</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {findings.map((f) => (
-              <tr key={f.id}>
-                <td><SeverityBadge severity={f.severity} /></td>
-                <td>{f.title}</td>
-                <td title={f.source_kind}>{f.source}{f.source_id ? ` / ${f.source_id}` : ''}</td>
-                <td>{assetLabel(f)}</td>
-                <td><StatusBadge status={f.status} /></td>
-                <td>{new Date(f.last_seen).toLocaleString()}</td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {f.status === 'open' && (
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => suppressMut.mutate(f.id)}
-                      disabled={suppressMut.isPending}
-                    >
-                      Suppress
-                    </button>
-                  )}
-                  {f.status === 'suppressed' && (
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => reopenMut.mutate(f.id)}
-                      disabled={reopenMut.isPending}
-                    >
-                      Reopen
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={findings}
+          initialSorting={[{ id: 'severity', desc: true }]}
+        />
       )}
     </div>
   );
