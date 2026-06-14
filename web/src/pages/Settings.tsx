@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { authApi } from '../api/authClient';
-import { getToken, listAuditEvents, type AuditEvent } from '../api/client';
+import { getToken } from '../api/client';
 import { useAuth } from '../auth/useAuth';
 import Team from './Team';
 import Credentials from './Credentials';
@@ -9,9 +9,10 @@ import Credentials from './Credentials';
 // Band 4). Team is folded in as a tab; the old top-level Team entry is
 // gone. Credentials consolidates DB/host auth + Integrations + Vaults.
 // Bundles moved to the top-level Compliance page (Level 1).
-// Audit log implemented per ADR 005 / O7.
+// Audit log promoted to its own top-level admin page (ADR 005 Addendum A5);
+// the former Settings → Audit sub-tab is gone.
 
-type Tab = 'profile' | 'team' | 'credentials' | 'audit';
+type Tab = 'profile' | 'team' | 'credentials';
 
 export default function Settings() {
   const { user, active } = useAuth();
@@ -27,14 +28,12 @@ export default function Settings() {
         <TabButton active={tab === 'profile'} onClick={() => setTab('profile')}>Profile</TabButton>
         {isAdmin && <TabButton active={tab === 'team'} onClick={() => setTab('team')}>Team</TabButton>}
         <TabButton active={tab === 'credentials'} onClick={() => setTab('credentials')}>Credentials</TabButton>
-        {isAdmin && <TabButton active={tab === 'audit'} onClick={() => setTab('audit')}>Audit</TabButton>}
       </div>
 
       <div style={{ marginTop: 'var(--ss-space-xl)' }}>
         {tab === 'profile' && <ProfileTab />}
         {tab === 'team' && isAdmin && <Team />}
         {tab === 'credentials' && <Credentials />}
-        {tab === 'audit' && isAdmin && <AuditTab />}
       </div>
     </div>
   );
@@ -160,181 +159,5 @@ function ProfileTab() {
         </form>
       </section>
     </>
-  );
-}
-
-// Event type → badge colour mapping per ADR 005 D7. The per-category tint pairs
-// (blue/grey/amber/green/purple) have no design-system token equivalents, so
-// they stay literal; only the shared radius is tokenized.
-function eventBadgeStyle(eventType: string): React.CSSProperties {
-  const base: React.CSSProperties = {
-    display: 'inline-block', padding: '2px 8px', borderRadius: 'var(--ss-radius-sm)',
-    fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-  };
-  if (eventType.startsWith('credential.')) return { ...base, background: '#dbeafe', color: '#1e40af' };
-  if (eventType.startsWith('scan')) return { ...base, background: '#f3f4f6', color: '#374151' };
-  if (eventType.startsWith('rule.')) return { ...base, background: '#fef3c7', color: '#92400e' };
-  if (eventType.startsWith('agent.')) return { ...base, background: '#d1fae5', color: '#065f46' };
-  if (eventType.startsWith('collection.')) return { ...base, background: '#ede9fe', color: '#5b21b6' };
-  return { ...base, background: '#f3f4f6', color: '#374151' };
-}
-
-const EVENT_TYPE_OPTIONS = [
-  '', 'credential.fetch', 'credential.created', 'credential.updated', 'credential.deleted',
-  'credential.mapped', 'credential.unmapped', 'credential.test',
-  'scan.dispatched', 'scan.completed', 'scan.failed',
-  'scan_definition.created', 'scan_definition.updated', 'scan_definition.deleted', 'scan_definition.executed',
-  'rule.created', 'rule.updated', 'rule.deleted', 'rule.fired',
-  'agent.connected', 'agent.disconnected', 'agent.upgraded', 'agent.key_rotated', 'agent.deleted', 'agent.created',
-  'collection.created', 'collection.updated', 'collection.deleted',
-];
-
-function AuditTab() {
-  const [items, setItems] = useState<AuditEvent[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
-  // Filters
-  const [eventType, setEventType] = useState('');
-  const [resourceSearch, setResourceSearch] = useState('');
-
-  const fetchEvents = useCallback(async (cursor?: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const result = await listAuditEvents({
-        event_type: eventType || undefined,
-        resource_id: resourceSearch || undefined,
-        since,
-        limit: 50,
-        cursor,
-      });
-      if (cursor) {
-        setItems(prev => [...prev, ...result.items]);
-      } else {
-        setItems(result.items);
-      }
-      setNextCursor(result.next_cursor);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [eventType, resourceSearch]);
-
-  // Fetch-on-dependency-change: fetchEvents synchronously flips loading/error
-  // (the intentional "start loading" transition), then sets items after the
-  // await — a genuine data fetch, not the derived-state anti-pattern the rule
-  // targets. Verified load-bearing under eslint 10.5.0 / react-hooks 7.1.1
-  // (removal → set-state-in-effect error). A react-query migration would drop
-  // the manual effect entirely; tracked separately.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
-
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleString();
-  }
-
-  function formatActor(ev: AuditEvent): string {
-    if (ev.actor_type === 'system') return 'system';
-    const id = ev.actor_id ?? '';
-    return `${ev.actor_type}:${id.slice(0, 8)}`;
-  }
-
-  function formatResource(ev: AuditEvent): string {
-    if (!ev.resource_type) return '-';
-    const id = ev.resource_id ?? '';
-    return `${ev.resource_type}:${id.slice(0, 8)}`;
-  }
-
-  return (
-    <section>
-      <h2>Audit log</h2>
-      <p className="muted" style={{ marginBottom: 'var(--ss-space-lg)' }}>
-        Read-only log of privileged operations. Showing the last 7 days.
-      </p>
-
-      <div style={{ display: 'flex', gap: 'var(--ss-space-md)', marginBottom: 'var(--ss-space-lg)', flexWrap: 'wrap' }}>
-        <select value={eventType} onChange={e => setEventType(e.target.value)}
-          style={{ padding: '6px 10px', borderRadius: 'var(--ss-radius-sm)', border: '1px solid var(--ss-border-default)' }}>
-          <option value="">All event types</option>
-          {EVENT_TYPE_OPTIONS.filter(Boolean).map(t => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <input
-          type="text" placeholder="Resource ID..."
-          value={resourceSearch} onChange={e => setResourceSearch(e.target.value)}
-          style={{ padding: '6px 10px', borderRadius: 'var(--ss-radius-sm)', border: '1px solid var(--ss-border-default)', width: 240 }}
-        />
-      </div>
-
-      {error && <p className="error">{error}</p>}
-
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-        <thead>
-          <tr style={{ borderBottom: '2px solid var(--ss-border-default)', textAlign: 'left' }}>
-            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Timestamp</th>
-            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Event Type</th>
-            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Actor</th>
-            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Resource</th>
-            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(ev => (
-            <>
-              {/* Very-light row separator — no --ss-* token this light; kept literal. */}
-              <tr key={ev.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', whiteSpace: 'nowrap' }}>{formatTime(ev.occurred_at)}</td>
-                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>
-                  <span style={eventBadgeStyle(ev.event_type)}>{ev.event_type}</span>
-                </td>
-                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', fontFamily: 'monospace', fontSize: 12 }}>{formatActor(ev)}</td>
-                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', fontFamily: 'monospace', fontSize: 12 }}>{formatResource(ev)}</td>
-                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>
-                  <button
-                    onClick={() => setExpandedId(expandedId === ev.id ? null : ev.id)}
-                    style={{ background: 'none', border: 'none', color: 'var(--ss-accent-primary)', cursor: 'pointer', fontSize: 12 }}
-                  >
-                    {expandedId === ev.id ? 'Hide' : 'Show'}
-                  </button>
-                </td>
-              </tr>
-              {expandedId === ev.id && (
-                <tr key={`${ev.id}-detail`}>
-                  <td colSpan={5} style={{ padding: 'var(--ss-space-sm) var(--ss-space-md) var(--ss-space-lg)', background: 'var(--ss-bg-raised)' }}>
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      {JSON.stringify(ev.payload, null, 2)}
-                    </pre>
-                  </td>
-                </tr>
-              )}
-            </>
-          ))}
-          {items.length === 0 && !loading && (
-            <tr><td colSpan={5} style={{ padding: 'var(--ss-space-xl)', textAlign: 'center', color: 'var(--ss-text-muted)' }}>
-              No audit events found for the selected filters.
-            </td></tr>
-          )}
-        </tbody>
-      </table>
-
-      {loading && <p className="muted" style={{ marginTop: 'var(--ss-space-md)' }}>Loading...</p>}
-
-      {nextCursor && !loading && (
-        <button
-          className="btn btn-secondary"
-          onClick={() => fetchEvents(nextCursor)}
-          style={{ marginTop: 'var(--ss-space-md)' }}
-        >
-          Load more
-        </button>
-      )}
-    </section>
   );
 }

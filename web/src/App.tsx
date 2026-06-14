@@ -16,6 +16,7 @@ import Findings from './pages/Findings';
 import Compliance from './pages/Compliance';
 import Team from './pages/Team';
 import Settings from './pages/Settings';
+import AuditLog from './pages/AuditLog';
 import Login from './pages/Login';
 import AcceptInvite from './pages/AcceptInvite';
 import ForgotPassword from './pages/ForgotPassword';
@@ -54,6 +55,7 @@ export default function App() {
               <Route path="/compliance" element={<Compliance />} />
               <Route path="/team" element={<Team />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/audit" element={<AuditLog />} />
               <Route path="/rules" element={<CorrelationRules />} />
               <Route path="/collections" element={<Collections />} />
             </Route>
