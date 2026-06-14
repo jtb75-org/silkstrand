@@ -23,14 +23,14 @@ export default function Settings() {
       <h1>Settings</h1>
       <p className="muted">Signed in as <strong>{user?.email}</strong>.</p>
 
-      <div className="tab-bar" style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e5e7eb', marginTop: 16 }}>
+      <div className="tab-bar" style={{ display: 'flex', gap: 'var(--ss-space-xs)', borderBottom: '1px solid var(--ss-border-default)', marginTop: 'var(--ss-space-lg)' }}>
         <TabButton active={tab === 'profile'} onClick={() => setTab('profile')}>Profile</TabButton>
         {isAdmin && <TabButton active={tab === 'team'} onClick={() => setTab('team')}>Team</TabButton>}
         <TabButton active={tab === 'credentials'} onClick={() => setTab('credentials')}>Credentials</TabButton>
         {isAdmin && <TabButton active={tab === 'audit'} onClick={() => setTab('audit')}>Audit</TabButton>}
       </div>
 
-      <div style={{ marginTop: 24 }}>
+      <div style={{ marginTop: 'var(--ss-space-xl)' }}>
         {tab === 'profile' && <ProfileTab />}
         {tab === 'team' && isAdmin && <Team />}
         {tab === 'credentials' && <Credentials />}
@@ -45,9 +45,9 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
     <button
       onClick={onClick}
       style={{
-        padding: '8px 16px',
+        padding: 'var(--ss-space-sm) var(--ss-space-lg)',
         border: 'none',
-        borderBottom: active ? '2px solid #0f766e' : '2px solid transparent',
+        borderBottom: active ? '2px solid var(--ss-accent-primary)' : '2px solid transparent',
         background: 'none',
         fontWeight: active ? 600 : 400,
         cursor: 'pointer',
@@ -131,6 +131,7 @@ function ProfileTab() {
               placeholder="Shown in members lists and emails"
             />
           </label>
+          {/* Dark success/danger status text — no --ss-* dark-text token exists, kept literal. */}
           {nameMsg && <p style={{ color: nameMsg.includes('updated') ? '#065f46' : '#b91c1c' }}>{nameMsg}</p>}
           <button className="btn btn-primary" disabled={nameBusy}>
             {nameBusy ? 'Saving…' : 'Save'}
@@ -138,7 +139,7 @@ function ProfileTab() {
         </form>
       </section>
 
-      <section style={{ marginTop: 24, maxWidth: 420 }}>
+      <section style={{ marginTop: 'var(--ss-space-xl)', maxWidth: 420 }}>
         <h2>Change password</h2>
         <form onSubmit={submit}>
           <label>Current password
@@ -151,6 +152,7 @@ function ProfileTab() {
             <input type="password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} />
           </label>
           {err && <p className="error">{err}</p>}
+          {/* Dark success text — no --ss-* dark-text token exists, kept literal. */}
           {msg && <p style={{ color: '#065f46' }}>{msg}</p>}
           <button className="btn btn-primary" disabled={busy}>
             {busy ? 'Saving…' : 'Update password'}
@@ -161,10 +163,12 @@ function ProfileTab() {
   );
 }
 
-// Event type → badge colour mapping per ADR 005 D7.
+// Event type → badge colour mapping per ADR 005 D7. The per-category tint pairs
+// (blue/grey/amber/green/purple) have no design-system token equivalents, so
+// they stay literal; only the shared radius is tokenized.
 function eventBadgeStyle(eventType: string): React.CSSProperties {
   const base: React.CSSProperties = {
-    display: 'inline-block', padding: '2px 8px', borderRadius: 4,
+    display: 'inline-block', padding: '2px 8px', borderRadius: 'var(--ss-radius-sm)',
     fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
   };
   if (eventType.startsWith('credential.')) return { ...base, background: '#dbeafe', color: '#1e40af' };
@@ -224,8 +228,9 @@ function AuditTab() {
   // Fetch-on-dependency-change: fetchEvents synchronously flips loading/error
   // (the intentional "start loading" transition), then sets items after the
   // await — a genuine data fetch, not the derived-state anti-pattern the rule
-  // targets. (A react-query migration would remove the manual effect entirely;
-  // tracked separately.)
+  // targets. Verified load-bearing under eslint 10.5.0 / react-hooks 7.1.1
+  // (removal → set-state-in-effect error). A react-query migration would drop
+  // the manual effect entirely; tracked separately.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
@@ -249,13 +254,13 @@ function AuditTab() {
   return (
     <section>
       <h2>Audit log</h2>
-      <p className="muted" style={{ marginBottom: 16 }}>
+      <p className="muted" style={{ marginBottom: 'var(--ss-space-lg)' }}>
         Read-only log of privileged operations. Showing the last 7 days.
       </p>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 'var(--ss-space-md)', marginBottom: 'var(--ss-space-lg)', flexWrap: 'wrap' }}>
         <select value={eventType} onChange={e => setEventType(e.target.value)}
-          style={{ padding: '6px 10px', borderRadius: 4, border: '1px solid #d1d5db' }}>
+          style={{ padding: '6px 10px', borderRadius: 'var(--ss-radius-sm)', border: '1px solid var(--ss-border-default)' }}>
           <option value="">All event types</option>
           {EVENT_TYPE_OPTIONS.filter(Boolean).map(t => (
             <option key={t} value={t}>{t}</option>
@@ -264,7 +269,7 @@ function AuditTab() {
         <input
           type="text" placeholder="Resource ID..."
           value={resourceSearch} onChange={e => setResourceSearch(e.target.value)}
-          style={{ padding: '6px 10px', borderRadius: 4, border: '1px solid #d1d5db', width: 240 }}
+          style={{ padding: '6px 10px', borderRadius: 'var(--ss-radius-sm)', border: '1px solid var(--ss-border-default)', width: 240 }}
         />
       </div>
 
@@ -272,28 +277,29 @@ function AuditTab() {
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
         <thead>
-          <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
-            <th style={{ padding: '8px 12px' }}>Timestamp</th>
-            <th style={{ padding: '8px 12px' }}>Event Type</th>
-            <th style={{ padding: '8px 12px' }}>Actor</th>
-            <th style={{ padding: '8px 12px' }}>Resource</th>
-            <th style={{ padding: '8px 12px' }}>Details</th>
+          <tr style={{ borderBottom: '2px solid var(--ss-border-default)', textAlign: 'left' }}>
+            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Timestamp</th>
+            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Event Type</th>
+            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Actor</th>
+            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Resource</th>
+            <th style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>Details</th>
           </tr>
         </thead>
         <tbody>
           {items.map(ev => (
             <>
+              {/* Very-light row separator — no --ss-* token this light; kept literal. */}
               <tr key={ev.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>{formatTime(ev.occurred_at)}</td>
-                <td style={{ padding: '8px 12px' }}>
+                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', whiteSpace: 'nowrap' }}>{formatTime(ev.occurred_at)}</td>
+                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>
                   <span style={eventBadgeStyle(ev.event_type)}>{ev.event_type}</span>
                 </td>
-                <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontSize: 12 }}>{formatActor(ev)}</td>
-                <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontSize: 12 }}>{formatResource(ev)}</td>
-                <td style={{ padding: '8px 12px' }}>
+                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', fontFamily: 'monospace', fontSize: 12 }}>{formatActor(ev)}</td>
+                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)', fontFamily: 'monospace', fontSize: 12 }}>{formatResource(ev)}</td>
+                <td style={{ padding: 'var(--ss-space-sm) var(--ss-space-md)' }}>
                   <button
                     onClick={() => setExpandedId(expandedId === ev.id ? null : ev.id)}
-                    style={{ background: 'none', border: 'none', color: '#0f766e', cursor: 'pointer', fontSize: 12 }}
+                    style={{ background: 'none', border: 'none', color: 'var(--ss-accent-primary)', cursor: 'pointer', fontSize: 12 }}
                   >
                     {expandedId === ev.id ? 'Hide' : 'Show'}
                   </button>
@@ -301,7 +307,7 @@ function AuditTab() {
               </tr>
               {expandedId === ev.id && (
                 <tr key={`${ev.id}-detail`}>
-                  <td colSpan={5} style={{ padding: '8px 12px 16px', background: '#f9fafb' }}>
+                  <td colSpan={5} style={{ padding: 'var(--ss-space-sm) var(--ss-space-md) var(--ss-space-lg)', background: 'var(--ss-bg-raised)' }}>
                     <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       {JSON.stringify(ev.payload, null, 2)}
                     </pre>
@@ -311,20 +317,20 @@ function AuditTab() {
             </>
           ))}
           {items.length === 0 && !loading && (
-            <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>
+            <tr><td colSpan={5} style={{ padding: 'var(--ss-space-xl)', textAlign: 'center', color: 'var(--ss-text-muted)' }}>
               No audit events found for the selected filters.
             </td></tr>
           )}
         </tbody>
       </table>
 
-      {loading && <p className="muted" style={{ marginTop: 12 }}>Loading...</p>}
+      {loading && <p className="muted" style={{ marginTop: 'var(--ss-space-md)' }}>Loading...</p>}
 
       {nextCursor && !loading && (
         <button
           className="btn btn-secondary"
           onClick={() => fetchEvents(nextCursor)}
-          style={{ marginTop: 12 }}
+          style={{ marginTop: 'var(--ss-space-md)' }}
         >
           Load more
         </button>

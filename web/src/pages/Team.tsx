@@ -38,11 +38,13 @@ export default function Team() {
 
   // Refetch whenever the active tenant (or admin status) changes.
   // active.tenant_id captures the TenantSwitcher case where the user
-  // stays admin but the data source is different.
-  // set-state-in-effect: refresh() synchronously flips loading (the intentional
-  // "start loading" transition) then sets members/invites after the await — a
-  // genuine fetch-on-dependency-change, not derived state (react-query migration
-  // tracked separately). exhaustive-deps is narrowed to the real triggers.
+  // stays admin but the data source is different. refresh() synchronously flips
+  // loading (the intentional "start loading" transition) then sets
+  // members/invites after the await — a genuine fetch-on-dependency-change, not
+  // derived state. Deps are narrowed to the real triggers. Both directives are
+  // load-bearing under eslint 10.5.0 / react-hooks 7.1.1 (removal → exhaustive-
+  // deps 'refresh' warning + set-state-in-effect error); react-query migration
+  // tracked separately.
   // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
   useEffect(() => { void refresh(); }, [isAdmin, active?.tenant_id]);
 
@@ -130,9 +132,9 @@ export default function Team() {
       <p className="muted">Manage users in your tenant.</p>
 
       {isAdmin && (
-        <section style={{ marginTop: 24 }}>
+        <section style={{ marginTop: 'var(--ss-space-xl)' }}>
           <h2>Invite user</h2>
-          <form onSubmit={submitInvite} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <form onSubmit={submitInvite} style={{ display: 'flex', gap: 'var(--ss-space-sm)', alignItems: 'center' }}>
             <input
               type="email" required placeholder="user@example.com"
               value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
@@ -146,12 +148,12 @@ export default function Team() {
               {inviteBusy ? 'Sending…' : 'Send invite'}
             </button>
           </form>
-          {inviteMsg && <p style={{ marginTop: 8 }}>{inviteMsg}</p>}
+          {inviteMsg && <p style={{ marginTop: 'var(--ss-space-sm)' }}>{inviteMsg}</p>}
         </section>
       )}
 
       {isAdmin && invites.length > 0 && (
-        <section style={{ marginTop: 32 }}>
+        <section style={{ marginTop: 'var(--ss-space-2xl)' }}>
           <h2>Pending invitations</h2>
           <table className="table">
             <thead>
@@ -189,7 +191,7 @@ export default function Team() {
         </section>
       )}
 
-      <section style={{ marginTop: 32 }}>
+      <section style={{ marginTop: 'var(--ss-space-2xl)' }}>
         <h2>Members</h2>
         {loading && <p>Loading…</p>}
         {err && <p className="error">{err}</p>}
@@ -220,6 +222,7 @@ export default function Team() {
                     ) : m.role}
                   </td>
                   <td>
+                    {/* Dark success/danger status text — no --ss-* dark-text token, kept literal. */}
                     <span style={{
                       color: m.status === 'active' ? '#065f46' : '#b91c1c',
                       fontWeight: 500,
