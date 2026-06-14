@@ -382,7 +382,7 @@ export default function Assets() {
         <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
           <div className="form-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Import DNS names</h3>
-            <p className="muted" style={{ marginTop: 0, fontSize: 'var(--ss-text-body-sm)' }}>
+            <p className="muted" style={{ marginTop: 0, fontSize: '13px' }}>
               Discover websites behind a shared ingress / reverse proxy. Each name
               becomes its own asset (a <code>*.example.com</code> wildcard authorizes
               but creates no asset). Paste one per line.
@@ -392,10 +392,10 @@ export default function Assets() {
               placeholder={'app.example.com\napi.example.com\n*.internal.example.com'}
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              style={{ width: '100%', fontFamily: 'monospace', fontSize: 'var(--ss-text-body-sm)' }}
+              style={{ width: '100%', fontFamily: 'monospace', fontSize: '13px' }}
             />
             {importResult && (
-              <div style={{ marginTop: 'var(--ss-space-md)', fontSize: 'var(--ss-text-body-sm)' }}>
+              <div style={{ marginTop: 'var(--ss-space-md)', fontSize: '13px' }}>
                 <p style={{ margin: '0 0 6px' }}>
                   <strong>{importResult.imported.length}</strong> imported
                   {importResult.wildcards.length > 0 && <>, <strong>{importResult.wildcards.length}</strong> wildcard(s)</>}

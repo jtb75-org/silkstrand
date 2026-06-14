@@ -146,6 +146,11 @@ export default function DataTable<T>({
             onKeyDown={
               onRowClick
                 ? (e) => {
+                    // Only when the row itself is focused — not a child control
+                    // (e.g. the selection checkbox). Keyboard twin of the
+                    // checkbox stopPropagation; otherwise Space on the checkbox
+                    // would bubble up and open the row.
+                    if (e.target !== e.currentTarget) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       onRowClick(row.original);
