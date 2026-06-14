@@ -216,3 +216,52 @@ transparency feature, not sensitive).
 4. **Backoffice visibility**: should super-admins see cross-tenant
    audit? Probably yes for support scenarios, but requires a separate
    endpoint and is out of v1 scope.
+
+---
+
+## Addendum — 2026-06-14: payload enrichment + dedicated Audit Log page
+
+A Stitch design-exploration mock of a dedicated Audit Log page surfaced fields
+the shipped surface doesn't carry. Decisions on what to collect:
+
+### A1. Enrich `payload`, don't add columns
+Migration 026 settled on a flat schema and **dropped the `ip`/`actor_email`
+columns** D2 originally sketched. Rather than re-add columns, the new fields go
+in the existing **`payload` JSONB** — no migration; the list API already returns
+`payload`, so the UI reads them for free. Promote a key to a real column only if
+we ever need to *filter* on it (today we filter by `event_type`/`resource_id`/
+time, not by ip/actor).
+
+### A2. Collect ip / user_agent / actor_email — request-scoped, via context
+Captured **once in middleware** into the request `context`; `Writer.Emit(ctx, …)`
+merges them into `payload` at persist time, so every request-scoped emit is
+enriched with **no change to the ~20 call sites**. `actor_email` comes from the
+existing JWT `Claims.Email`; `ip` from `RemoteAddr`+`X-Forwarded-For`;
+`user_agent` from the request header.
+
+**Coverage caveat:** these exist only for **request-scoped** events. Background/
+system events — the high-volume `rule.fired`, scheduler-driven `credential.fetch`,
+agent lifecycle — have no request, so their `ip`/`user_agent` are **null by
+design**. Correct, not a gap.
+
+### A3. Collect `resource_label` — per emit site
+The biggest UX win: a **human-readable target label** (e.g. "Prod Postgres creds"
+vs `credential_source:9f8e…`), directly answering this ADR's "who touched *what*"
+query. Not in context, so populated per emit site (the handler has the object);
+prioritize credential sources, rules, scan defs, agents, collections.
+
+### A4. Deferred / rejected
+- **`user_agent`**: collected (near-free once ip plumbing exists) but low-value/
+  partial — kept for forensic completeness, not relied on.
+- **"Flag entry"**: rejected for v1 — a mutation that cuts against the read-only/
+  immutable-audit guarantee. Revisit only as a separate annotation layer.
+- **Human `ev_…` id**: cosmetic; the UUID stands.
+- **Export CSV**: accepted as a *separate* small follow-up (stream the filtered
+  query); not part of this enrichment.
+
+### A5. Surface
+Promote the audit log from the Settings sub-tab to a **dedicated page** (own nav
+item) using the shipped DataTable + detail-drawer patterns: TIME (rel+abs), EVENT
+pill, ACTOR (type badge + email), TARGET (label), SOURCE IP; row-click → drawer
+(General Info / Target / Raw Metadata dark JSON block). 90-day retention (D6)
+unchanged; ip/email are PII but covered by it.
