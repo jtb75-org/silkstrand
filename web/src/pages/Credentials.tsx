@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { KeyRound, Bell, Lock } from 'lucide-react';
 import {
   bulkCreateCredentialMappings,
   bulkCreateEndpointMappings,
@@ -20,6 +22,7 @@ import {
   type CredentialSourceType,
 } from '../api/client';
 import type { Agent } from '../api/types';
+import DataTable from '../components/DataTable';
 
 // Consolidated Credentials surface (P5-b). Three sections, one page:
 //
@@ -61,6 +64,7 @@ export default function Credentials() {
 
       <Section
         title="DB / host auth"
+        icon={<KeyRound size={20} style={{ color: 'var(--ss-accent-primary)' }} />}
         description="Static credentials used to authenticate compliance scans against databases and hosts."
         sources={staticSources}
         allowedTypes={['static']}
@@ -69,6 +73,7 @@ export default function Credentials() {
 
       <Section
         title="Integrations"
+        icon={<Bell size={20} style={{ color: 'var(--ss-accent-primary)' }} />}
         description="Notification channels and webhooks. Triggered by correlation-rule actions."
         sources={integrationSources}
         allowedTypes={INTEGRATION_TYPES}
@@ -76,6 +81,7 @@ export default function Credentials() {
 
       <Section
         title="Vaults"
+        icon={<Lock size={20} style={{ color: 'var(--ss-accent-primary)' }} />}
         description="External secret resolvers. AWS Secrets Manager and HashiCorp Vault are live; CyberArk is coming soon."
         sources={vaultSources}
         allowedTypes={VAULT_TYPES}
@@ -88,6 +94,7 @@ export default function Credentials() {
 
 interface SectionProps {
   title: string;
+  icon: ReactNode;
   description: string;
   sources: CredentialSource[];
   allowedTypes: CredentialSourceType[];
@@ -95,24 +102,140 @@ interface SectionProps {
   testableTypes?: string[];
 }
 
-function Section({ title, description, sources, allowedTypes, supportsMappings, testableTypes }: SectionProps) {
+// Which inline panel is expanded for which source. The legacy table rendered
+// these as sibling <tr> rows; DataTable owns its <tbody> and has no row-expand
+// API (and we don't widen the locked contract), so the per-row Test / Edit /
+// Map panels now render below the table for the single active source.
+type ActivePanel =
+  | { sourceId: string; kind: 'edit' | 'test' | 'map-collection' | 'map-asset_endpoint' | 'map-asset' }
+  | null;
+
+function Section({ title, icon, description, sources, allowedTypes, supportsMappings, testableTypes }: SectionProps) {
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const [active, setActive] = useState<ActivePanel>(null);
 
   const deleteMut = useMutation({
     mutationFn: deleteCredentialSource,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['credential-sources'] }),
   });
 
+  // One mappings query per section (was per-row); filtered per source in the
+  // Mappings cell + the active Map panel. Only needed when this section maps.
+  const { data: mappings } = useQuery({
+    queryKey: ['credential-mappings'],
+    queryFn: listCredentialMappings,
+    enabled: !!supportsMappings,
+  });
+
+  const columns: ColumnDef<CredentialSource>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      accessorFn: (s) => s.name ?? '',
+      cell: ({ row }) => row.original.name || <span className="muted">--</span>,
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      accessorFn: (s) => s.type,
+      cell: ({ row }) => <span className={`badge badge-type-${row.original.type}`}>{row.original.type}</span>,
+    },
+    {
+      id: 'config',
+      header: 'Config',
+      enableSorting: false,
+      // Secrets never render plaintext — renderConfigSummary masks passwords and
+      // shows only '(set)'/type for everything else.
+      cell: ({ row }) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{renderConfigSummary(row.original)}</span>
+      ),
+    },
+    {
+      id: 'created',
+      header: 'Created',
+      accessorFn: (s) => s.created_at,
+      cell: ({ row }) => <span style={{ fontSize: 12 }}>{new Date(row.original.created_at).toLocaleDateString()}</span>,
+    },
+    ...(supportsMappings
+      ? [{
+          id: 'mappings',
+          header: 'Mappings',
+          enableSorting: false,
+          cell: ({ row }: { row: { original: CredentialSource } }) => {
+            const mapped = (mappings ?? []).filter((m) => m.credential_source_id === row.original.id);
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+                <span>{mapped.length} mapped</span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const v = e.target.value as 'collection' | 'asset_endpoint' | 'asset' | '';
+                    if (v) setActive({ sourceId: row.original.id, kind: `map-${v}` });
+                  }}
+                  style={{ fontSize: 12 }}
+                >
+                  <option value="">Map to...</option>
+                  <option value="asset_endpoint">Endpoint</option>
+                  <option value="asset">Asset</option>
+                  <option value="collection">Collection</option>
+                </select>
+              </div>
+            );
+          },
+        } as ColumnDef<CredentialSource>]
+      : []),
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const s = row.original;
+        const testable = testableTypes?.includes(s.type) ?? false;
+        const editing = active?.sourceId === s.id && active.kind === 'edit';
+        return (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--ss-space-xs)' }}>
+            {testable && (
+              <button className="btn btn-sm" onClick={() => setActive({ sourceId: s.id, kind: 'test' })}>
+                Test
+              </button>
+            )}
+            <button
+              className="btn btn-sm"
+              onClick={() => setActive(editing ? null : { sourceId: s.id, kind: 'edit' })}
+            >
+              {editing ? 'Cancel' : 'Edit'}
+            </button>
+            <button
+              className="btn btn-sm btn-danger"
+              onClick={() => {
+                if (!window.confirm(`Delete ${s.name || s.type} credential source?`)) return;
+                deleteMut.mutate(s.id);
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
+
+  const activeSource = active ? sources.find((s) => s.id === active.sourceId) ?? null : null;
+  const activeMapped = activeSource
+    ? (mappings ?? []).filter((m) => m.credential_source_id === activeSource.id)
+    : [];
+
   return (
-    <section style={{ marginTop: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+    <section style={{ marginTop: 'var(--ss-space-xl)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-md)' }}>
+        {icon}
         <h2 style={{ margin: 0 }}>{title}</h2>
         <button className="btn btn-sm" onClick={() => setShowForm((v) => !v)}>
           {showForm ? 'Cancel' : '+ New'}
         </button>
       </div>
-      <p className="muted" style={{ marginTop: 4 }}>{description}</p>
+      <p className="muted" style={{ marginTop: 'var(--ss-space-xs)' }}>{description}</p>
 
       {showForm && (
         <CredentialSourceForm
@@ -122,150 +245,46 @@ function Section({ title, description, sources, allowedTypes, supportsMappings, 
       )}
 
       {sources.length === 0 ? (
-        <p className="muted" style={{ marginTop: 12 }}>None configured.</p>
+        <p className="muted" style={{ marginTop: 'var(--ss-space-md)' }}>None configured.</p>
       ) : (
-        <table className="table" style={{ marginTop: 12 }}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Config</th>
-              <th>Created</th>
-              {supportsMappings && <th>Mappings</th>}
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((s) => (
-              <SourceRow
-                key={s.id}
-                source={s}
-                supportsMappings={!!supportsMappings}
-                testable={testableTypes?.includes(s.type) ?? false}
-                onDelete={() => {
-                  if (!window.confirm(`Delete ${s.name || s.type} credential source?`)) return;
-                  deleteMut.mutate(s.id);
-                }}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div style={{ marginTop: 'var(--ss-space-md)' }}>
+          <DataTable
+            columns={columns}
+            data={sources}
+            getRowId={(s) => s.id}
+            initialSorting={[{ id: 'name', desc: false }]}
+          />
+        </div>
+      )}
+
+      {activeSource && active?.kind === 'test' && (
+        <TestCredentialModal source={activeSource} onClose={() => setActive(null)} />
+      )}
+      {activeSource && active?.kind === 'edit' && (
+        <EditSourceForm source={activeSource} onDone={() => setActive(null)} />
+      )}
+      {activeSource && active?.kind === 'map-collection' && (
+        <MapToCollectionPanel
+          sourceId={activeSource.id}
+          existingMappings={activeMapped.filter((m) => m.scope_kind === 'collection')}
+          onClose={() => setActive(null)}
+        />
+      )}
+      {activeSource && active?.kind === 'map-asset_endpoint' && (
+        <MapToEndpointPanel
+          sourceId={activeSource.id}
+          existingMappings={activeMapped.filter((m) => m.scope_kind === 'asset_endpoint')}
+          onClose={() => setActive(null)}
+        />
+      )}
+      {activeSource && active?.kind === 'map-asset' && (
+        <MapToAssetPanel
+          sourceId={activeSource.id}
+          existingMappings={activeMapped.filter((m) => m.scope_kind === 'asset')}
+          onClose={() => setActive(null)}
+        />
       )}
     </section>
-  );
-}
-
-function SourceRow({
-  source,
-  supportsMappings,
-  testable,
-  onDelete,
-}: {
-  source: CredentialSource;
-  supportsMappings: boolean;
-  testable: boolean;
-  onDelete: () => void;
-}) {
-  const { data: mappings } = useQuery({
-    queryKey: ['credential-mappings'],
-    queryFn: listCredentialMappings,
-    enabled: supportsMappings,
-  });
-  const [mapScope, setMapScope] = useState<'collection' | 'asset_endpoint' | 'asset' | null>(null);
-  const [showEditForm, setShowEditForm] = useState(false);
-  const [showTestModal, setShowTestModal] = useState(false);
-  const mapped = (mappings ?? []).filter((m) => m.credential_source_id === source.id);
-
-  return (
-    <>
-      <tr>
-        <td>{source.name || <span className="muted">--</span>}</td>
-        <td><span className={`badge badge-type-${source.type}`}>{source.type}</span></td>
-        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
-          {renderConfigSummary(source)}
-        </td>
-        <td style={{ fontSize: 12 }}>{new Date(source.created_at).toLocaleDateString()}</td>
-        {supportsMappings && (
-          <td>
-            <span style={{ marginRight: 8 }}>{mapped.length} mapped</span>
-            <select
-              value=""
-              onChange={(e) => setMapScope(e.target.value as 'collection' | 'asset_endpoint' | 'asset')}
-              style={{ fontSize: 12 }}
-            >
-              <option value="">Map to...</option>
-              <option value="asset_endpoint">Endpoint</option>
-              <option value="asset">Asset</option>
-              <option value="collection">Collection</option>
-            </select>
-          </td>
-        )}
-        <td style={{ display: 'flex', gap: 6 }}>
-          {testable && (
-            <button
-              className="btn btn-sm"
-              onClick={() => setShowTestModal(true)}
-            >
-              Test
-            </button>
-          )}
-          <button className="btn btn-sm" onClick={() => setShowEditForm((v) => !v)}>
-            {showEditForm ? 'Cancel' : 'Edit'}
-          </button>
-          <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
-        </td>
-      </tr>
-      {showTestModal && (
-        <tr>
-          <td colSpan={supportsMappings ? 6 : 5}>
-            <TestCredentialModal
-              source={source}
-              onClose={() => setShowTestModal(false)}
-            />
-          </td>
-        </tr>
-      )}
-      {showEditForm && (
-        <tr>
-          <td colSpan={supportsMappings ? 7 : 6}>
-            <EditSourceForm source={source} onDone={() => setShowEditForm(false)} />
-          </td>
-        </tr>
-      )}
-      {mapScope === 'collection' && (
-        <tr>
-          <td colSpan={supportsMappings ? 7 : 6}>
-            <MapToCollectionPanel
-              sourceId={source.id}
-              existingMappings={mapped.filter((m) => m.scope_kind === 'collection')}
-              onClose={() => setMapScope(null)}
-            />
-          </td>
-        </tr>
-      )}
-      {mapScope === 'asset_endpoint' && (
-        <tr>
-          <td colSpan={supportsMappings ? 7 : 6}>
-            <MapToEndpointPanel
-              sourceId={source.id}
-              existingMappings={mapped.filter((m) => m.scope_kind === 'asset_endpoint')}
-              onClose={() => setMapScope(null)}
-            />
-          </td>
-        </tr>
-      )}
-      {mapScope === 'asset' && (
-        <tr>
-          <td colSpan={supportsMappings ? 7 : 6}>
-            <MapToAssetPanel
-              sourceId={source.id}
-              existingMappings={mapped.filter((m) => m.scope_kind === 'asset')}
-              onClose={() => setMapScope(null)}
-            />
-          </td>
-        </tr>
-      )}
-    </>
   );
 }
 
@@ -313,21 +332,21 @@ function TestCredentialModal({
 
   return (
     <div style={{
-      border: '1px solid var(--border-color, #e2e8f0)',
-      borderRadius: 6,
-      padding: 16,
-      background: 'var(--surface-color, #fff)',
-      marginTop: 4,
-      marginBottom: 4,
+      border: '1px solid var(--ss-border-default)',
+      borderRadius: 'var(--ss-radius-md)',
+      padding: 'var(--ss-space-lg)',
+      background: 'var(--ss-bg-surface)',
+      marginTop: 'var(--ss-space-xs)',
+      marginBottom: 'var(--ss-space-xs)',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--ss-space-md)' }}>
         <strong>Test Credential</strong>
         <button className="btn btn-sm" onClick={onClose} style={{ fontSize: 12 }}>Close</button>
       </div>
 
-      <div style={{ marginBottom: 12 }}>
+      <div style={{ marginBottom: 'var(--ss-space-md)' }}>
         <div style={{ fontSize: 13, marginBottom: 6, fontWeight: 500 }}>Test from:</div>
-        <label style={{ display: 'block', cursor: 'pointer', marginBottom: 4 }}>
+        <label style={{ display: 'block', cursor: 'pointer', marginBottom: 'var(--ss-space-xs)' }}>
           <input
             type="radio"
             name={`test-mode-${source.id}`}
@@ -352,7 +371,7 @@ function TestCredentialModal({
       </div>
 
       {mode === 'agent' && (
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 'var(--ss-space-md)' }}>
           <label style={{ fontSize: 13, fontWeight: 500 }}>Agent:</label>
           <select
             value={selectedAgent}
@@ -384,12 +403,14 @@ function TestCredentialModal({
 
       {testResult && (
         <div style={{
-          marginTop: 12,
-          padding: '8px 12px',
+          marginTop: 'var(--ss-space-md)',
+          padding: 'var(--ss-space-sm) var(--ss-space-md)',
           fontSize: 13,
+          // No success-bg/danger-bg token exists; keep the light tints literal
+          // and token the accent border (--ss-success / --ss-danger).
           background: testResult.success ? '#f0fdf4' : '#fef2f2',
-          borderLeft: `3px solid ${testResult.success ? '#22c55e' : '#ef4444'}`,
-          borderRadius: 4,
+          borderLeft: `3px solid ${testResult.success ? 'var(--ss-success)' : 'var(--ss-danger)'}`,
+          borderRadius: 'var(--ss-radius-sm)',
         }}>
           {testResult.success
             ? <>Success{testResult.username ? ` -- username: ${testResult.username}` : ''}</>
