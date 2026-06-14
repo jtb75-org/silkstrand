@@ -1,0 +1,107 @@
+# Default values for silkstrand-agent.
+
+# replicaCount: keep at 1. The agent self-bootstraps ONE identity backed by a
+# RWO creds PVC, so >1 replica is NOT supported by this chart yet — multi-agent
+# pools (shared chunk queue, per-member identity) are ADR 016 (pool-join token).
+replicaCount: 1
+
+image:
+  repository: zot.ng20.org/silkstrand-agent
+  # tag defaults to .Chart.appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Image pull secret(s). The agent image lives in a private registry
+# (public zot ingress requires auth — see jtb75-org/silkstrand#369), so a
+# dockerconfigjson secret is normally required.
+imagePullSecrets: []
+#  - name: zot-pull
+
+# --- Agent enrollment ------------------------------------------------------
+# Provide EITHER an install token (self-bootstrap → mints id+key on first start)
+# OR a pre-bootstrapped agent id+key. Token is the k8s-native path.
+auth:
+  # Single-use install token (sst_...). Stored in a Secret by the chart.
+  installToken: ""
+  # Pre-provisioned identity (alternative to installToken).
+  agentId: ""
+  agentKey: ""
+  # Reference an existing Secret instead of letting the chart create one.
+  # Keys expected: install-token, or agent-id + agent-key.
+  existingSecret: ""
+
+# DC API WebSocket URL the agent connects to (front door).
+apiUrl: "wss://api.silkstrand.io"
+
+agent:
+  # Display name; defaults to the pod hostname when empty.
+  name: ""
+  # NOTE: agent zone is NOT set here — the agent takes its zone from the
+  # install-token metadata at bootstrap. Mint the token with the zone.
+  logLevel: "info"
+  # naabu scan type: "c" (connect) is baked into the image and is the safe
+  # default in NAT'd pods. Set "s" (SYN) only on a privileged host network.
+  naabuScanType: ""
+
+# --- Scan allowlist (the agent scans ONLY these) ---------------------------
+allowlist:
+  cidrs:
+    - 192.168.0.0/24
+  deny: []
+  rateLimitPps: 500
+
+# --- Identity persistence (resume-on-restart) ------------------------------
+# The creds file must survive restarts so a bounced pod reconnects as the SAME
+# agent (and the server resumes its in-flight chunk). Disable only for
+# throwaway/ephemeral agents that re-enroll each start (needs a reusable token).
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+
+# --- Egress NetworkPolicy --------------------------------------------------
+# In locked-down namespaces a default-deny-egress will block the agent from
+# Cloudflare (WSS + recon-tool download) and the LAN (scanning). This policy
+# allows exactly what the agent needs. Disable if the namespace has no egress
+# restrictions. (allowlist.cidrs are added as scan-egress targets automatically.)
+networkPolicy:
+  enabled: true
+  # Extra CIDRs the agent may scan, beyond allowlist.cidrs.
+  extraScanCidrs: []
+  # DNS: namespace label selector for the cluster DNS namespace.
+  dnsNamespace: kube-system
+  # Extra raw egress rules — for an HTTPS proxy (:8080/:3128), a custom-CA
+  # host, NTP, etc. The built-in rules only allow :443. NOTE: a NetworkPolicy
+  # does NOT firewall image pulls (kubelet/node egress) and may not apply to
+  # hostNetwork pods on some CNIs.
+  extraEgress: []
+  #  - to: [{ ipBlock: { cidr: 10.0.0.5/32 } }]
+  #    ports: [{ port: 3128, protocol: TCP }]
+
+# Resources — sized from observed usage (naabu/httpx ~I/O-bound; nuclei bursts
+# to ~0.5 core / ~450Mi). Limits give headroom for larger scopes.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# nonroot uid/gid baked into the agent image.
+podSecurityContext:
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+# Set true ONLY when the agent must scan the node's directly-attached LAN and
+# pod-network SNAT egress isn't sufficient. Requires dnsPolicy override and has
+# kube-proxy/ClusterIP caveats — leave false unless you know you need it.
+hostNetwork: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+extraEnv: []

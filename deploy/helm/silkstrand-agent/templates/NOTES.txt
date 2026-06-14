@@ -1,0 +1,26 @@
+SilkStrand agent "{{ include "silkstrand-agent.fullname" . }}" deployed.
+
+  Image:     {{ include "silkstrand-agent.image" . }}
+  API URL:   {{ .Values.apiUrl }}
+  Allowlist: {{ join ", " .Values.allowlist.cidrs }}
+  Identity:  {{ if .Values.persistence.enabled }}persisted (PVC) — survives restarts{{ else }}EPHEMERAL (emptyDir) — re-enrolls each start{{ end }}
+
+Watch it connect + auto-discover:
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+{{- if and (not .Values.auth.installToken) (not .Values.auth.existingSecret) (not (and .Values.auth.agentId .Values.auth.agentKey)) }}
+
+WARNING: no enrollment credentials set — the pod will crash-loop.
+Set auth.installToken (or auth.agentId+agentKey, or auth.existingSecret).
+{{- end }}
+{{- if and .Values.auth.installToken (not .Values.persistence.enabled) }}
+
+NOTE: install tokens are single-use. With persistence.enabled=false the pod
+re-enrolls on every restart and a single-use token will fail the second time.
+Keep persistence enabled, or use a reusable enrollment token.
+{{- end }}
+{{- if not .Values.imagePullSecrets }}
+
+NOTE: imagePullSecrets is empty. The agent image registry requires auth
+(jtb75-org/silkstrand#369) — set imagePullSecrets if the pull fails.
+{{- end }}

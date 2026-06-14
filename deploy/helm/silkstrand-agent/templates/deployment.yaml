@@ -1,0 +1,120 @@
+{{- include "silkstrand-agent.validateReplicas" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "silkstrand-agent.fullname" . }}
+  labels:
+    {{- include "silkstrand-agent.labels" . | nindent 4 }}
+spec:
+  # >1 unsupported: single identity + RWO creds PVC. Pools = ADR 016.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate            # single RWO creds volume — no rolling overlap
+  selector:
+    matchLabels:
+      {{- include "silkstrand-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "silkstrand-agent.selectorLabels" . | nindent 8 }}
+      annotations:
+        # roll the pod when the allowlist changes
+        checksum/allowlist: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The agent is outbound-only and never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      containers:
+        - name: agent
+          image: {{ include "silkstrand-agent.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+            # NOT readOnlyRootFilesystem: the agent writes recon tools to
+            # /home/nonroot/runtimes on first scan.
+          env:
+            # Enrollment: whichever keys exist in the secret win (optional refs).
+            - name: SILKSTRAND_INSTALL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silkstrand-agent.secretName" . }}
+                  key: install-token
+                  optional: true
+            - name: SILKSTRAND_AGENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silkstrand-agent.secretName" . }}
+                  key: agent-id
+                  optional: true
+            - name: SILKSTRAND_AGENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "silkstrand-agent.secretName" . }}
+                  key: agent-key
+                  optional: true
+            - name: SILKSTRAND_API_URL
+              value: {{ .Values.apiUrl | quote }}
+            - name: SILKSTRAND_SCAN_ALLOWLIST_PATH
+              value: /etc/silkstrand/scan-allowlist.yaml
+            - name: SILKSTRAND_CREDS_PATH
+              value: /creds/agent.creds
+            {{- if .Values.agent.name }}
+            - name: SILKSTRAND_AGENT_NAME
+              value: {{ .Values.agent.name | quote }}
+            {{- end }}
+            - name: SILKSTRAND_LOG_LEVEL
+              value: {{ .Values.agent.logLevel | quote }}
+            {{- if .Values.agent.naabuScanType }}
+            - name: SILKSTRAND_NAABU_SCAN_TYPE
+              value: {{ .Values.agent.naabuScanType | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: allowlist
+              mountPath: /etc/silkstrand
+              readOnly: true
+            - name: creds
+              mountPath: /creds
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: allowlist
+          configMap:
+            name: {{ include "silkstrand-agent.fullname" . }}-allowlist
+        - name: creds
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "silkstrand-agent.fullname" . }}-creds
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,41 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "silkstrand-agent.fullname" . }}-egress
+  labels:
+    {{- include "silkstrand-agent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "silkstrand-agent.selectorLabels" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    # Cloudflare: WSS to the DC API + recon-tool download (downloads.silkstrand.io)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { port: 443, protocol: TCP }
+    # LAN scanning — naabu/httpx/nuclei hit arbitrary ports on these CIDRs
+    {{- $scan := concat .Values.allowlist.cidrs .Values.networkPolicy.extraScanCidrs }}
+    {{- with $scan }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    {{- with .Values.networkPolicy.extraEgress }}
+    # Operator-supplied egress (HTTPS proxy, custom CA, NTP, …)
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
