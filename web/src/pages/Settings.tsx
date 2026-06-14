@@ -61,11 +61,19 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
 function ProfileTab() {
   const { user, refresh } = useAuth();
 
-  const [name, setName] = useState(user?.display_name ?? '');
+  const displayName = user?.display_name ?? '';
+  const [name, setName] = useState(displayName);
+  const [syncedName, setSyncedName] = useState(displayName);
   const [nameMsg, setNameMsg] = useState<string | null>(null);
   const [nameBusy, setNameBusy] = useState(false);
 
-  useEffect(() => { setName(user?.display_name ?? ''); }, [user?.display_name]);
+  // Resync the editable name when display_name changes upstream (e.g. after a
+  // save / tenant switch) — during render via a tracked value, not a
+  // set-state-in-effect.
+  if (displayName !== syncedName) {
+    setSyncedName(displayName);
+    setName(displayName);
+  }
 
   async function submitName(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -213,6 +221,12 @@ function AuditTab() {
     }
   }, [eventType, resourceSearch]);
 
+  // Fetch-on-dependency-change: fetchEvents synchronously flips loading/error
+  // (the intentional "start loading" transition), then sets items after the
+  // await — a genuine data fetch, not the derived-state anti-pattern the rule
+  // targets. (A react-query migration would remove the manual effect entirely;
+  // tracked separately.)
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
   function formatTime(iso: string): string {

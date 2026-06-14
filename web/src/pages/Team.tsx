@@ -39,7 +39,11 @@ export default function Team() {
   // Refetch whenever the active tenant (or admin status) changes.
   // active.tenant_id captures the TenantSwitcher case where the user
   // stays admin but the data source is different.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // set-state-in-effect: refresh() synchronously flips loading (the intentional
+  // "start loading" transition) then sets members/invites after the await — a
+  // genuine fetch-on-dependency-change, not derived state (react-query migration
+  // tracked separately). exhaustive-deps is narrowed to the real triggers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
   useEffect(() => { void refresh(); }, [isAdmin, active?.tenant_id]);
 
   async function submitInvite(e: FormEvent<HTMLFormElement>) {

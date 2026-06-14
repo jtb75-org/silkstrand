@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 // Flat-conjunction visual builder for the predicate grammar used by
 // asset_sets.predicate and correlation_rules.body.match. Each row is a
@@ -67,16 +67,20 @@ interface Row {
 export default function PredicateBuilder({ value, onChange }: Props) {
   // Initial mode is decided by whether `value` fits the flat form.
   const initial = useMemo(() => jsonToRows(value), [value]);
-  // Stringify once for the raw editor so re-renders don't re-format.
-  const [rawText, setRawText] = useState(() => JSON.stringify(value, null, 2));
+  const valueText = useMemo(() => JSON.stringify(value, null, 2), [value]);
+  const [rawText, setRawText] = useState(valueText);
+  const [syncedText, setSyncedText] = useState(valueText);
   const [rawErr, setRawErr] = useState<string | null>(null);
   const [mode, setMode] = useState<'builder' | 'raw'>(initial ? 'builder' : 'raw');
   const [rows, setRows] = useState<Row[]>(initial ?? []);
 
-  // When `value` changes from outside (e.g. reset on submit), resync.
-  useEffect(() => {
-    setRawText(JSON.stringify(value, null, 2));
-  }, [value]);
+  // When `value` changes from outside (e.g. reset on submit), resync the raw
+  // editor. Done during render via a tracked signature rather than a
+  // set-state-in-effect — same result, one fewer render, no effect.
+  if (valueText !== syncedText) {
+    setSyncedText(valueText);
+    setRawText(valueText);
+  }
 
   function emitRows(next: Row[]) {
     setRows(next);
