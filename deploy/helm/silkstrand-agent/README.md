@@ -41,9 +41,12 @@ Mint the install token from the tenant UI (Agents → Add Agent) or the API.
 - **`hostNetwork=true`**: some CNIs don't apply pod NetworkPolicy to host-network pods — the egress policy may be bypassed.
 
 ## Caveats / known follow-ons
-- **`in_container` detection**: a k8s-deployed agent currently reports
-  `in_container=false` (detection is Docker-`/.dockerenv`-specific). Tracked
-  separately; affects the "Recreate vs Upgrade" UX, not scanning.
+- **`in_container` detection**: as of #390 the agent detects k8s pods
+  (`KUBERNETES_SERVICE_HOST`, plus podman `/run/.containerenv` and cgroup-v2
+  signals), so a freshly built agent correctly reports `in_container=true` in a
+  pod. Agents running a build older than #390 still report `in_container=false`
+  until upgraded — a live caveat for already-deployed agents, not a code
+  limitation. Affects the "Recreate vs Upgrade" UX, not scanning.
 - **`replicaCount > 1`**: hard-rejected at template time (single RWO creds +
   single identity). Horizontal pools require ADR 016 (proposed) (lease-based
   claim + pool-join enrollment).
