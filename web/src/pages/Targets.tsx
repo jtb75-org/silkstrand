@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Target as TargetIcon, Crosshair } from 'lucide-react';
 import { listTargets, createTarget, deleteTarget, listAgents, probeTarget, updateTarget } from '../api/client';
 import type { Target, TargetType, CreateTargetRequest, UpdateTargetRequest, Agent } from '../api/types';
 import CredentialModal from '../components/CredentialModal';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 // Supported technologies for the target creation form. The `type` value is
 // what the API stores (and what the prober / bundle matcher dispatch on).
@@ -227,10 +231,89 @@ export default function Targets() {
     }
   }
 
+  // Per-row actions. A plain render fn (closes over the mutations/probe state)
+  // rather than an inner component. Targets has no selection + no single
+  // row-detail action, so rows are non-clickable — the buttons carry their own
+  // handlers and need no stopPropagation (no row click to bubble into).
+  const renderActions = (t: Target) => (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--ss-space-xs)' }}>
+      {probeResult[t.id] && (
+        <span
+          style={{ fontSize: 12, color: probeResult[t.id].ok ? 'var(--ss-success)' : 'var(--ss-danger)' }}
+          title={probeResult[t.id].msg}
+        >
+          {probeResult[t.id].ok
+            ? '✓ connected'
+            : `✗ ${probeResult[t.id].msg.slice(0, 40)}${probeResult[t.id].msg.length > 40 ? '…' : ''}`}
+        </span>
+      )}
+      {!isDiscoveryType(t.type) && (
+        <>
+          <button
+            className="btn btn-sm"
+            onClick={() => handleProbe(t.id)}
+            disabled={probeBusy[t.id]}
+            title="Send a lightweight connection test through the agent"
+          >
+            {probeBusy[t.id] ? 'Testing…' : 'Test'}
+          </button>
+          <button className="btn btn-sm" onClick={() => setCredTarget(t)}>Credential</button>
+        </>
+      )}
+      <button className="btn btn-sm" onClick={() => handleEdit(t)}>Edit</button>
+      <button className="btn btn-danger btn-sm" onClick={() => handleDelete(t.id)} disabled={deleteMutation.isPending}>
+        Delete
+      </button>
+    </div>
+  );
+
+  const columns: ColumnDef<Target>[] = [
+    {
+      id: 'technology',
+      header: 'Technology',
+      accessorFn: (t) => techLabel(t.type),
+      cell: ({ row }) => <span className="badge badge-type">{techLabel(row.original.type)}</span>,
+    },
+    { id: 'name', header: 'Name', accessorFn: (t) => t.identifier },
+    { id: 'environment', header: 'Environment', accessorFn: (t) => t.environment || '-' },
+    {
+      // Inline agent reassignment select — interactive cell, non-sortable.
+      id: 'agent',
+      header: 'Agent',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const t = row.original;
+        return (
+          <select
+            value={t.agent_id ?? ''}
+            onChange={(e) => assignAgentMutation.mutate({ id: t.id, agentId: e.target.value || undefined })}
+            disabled={assignAgentMutation.isPending}
+            title="Assign an agent to this target"
+          >
+            <option value="">— unassigned —</option>
+            {agents?.map((a) => (
+              <option key={a.id} value={a.id}>{a.name} ({a.status})</option>
+            ))}
+          </select>
+        );
+      },
+    },
+    {
+      id: 'created',
+      header: 'Created',
+      accessorFn: (t) => t.created_at,
+      cell: ({ row }) => new Date(row.original.created_at).toLocaleString(),
+    },
+    { id: 'actions', header: '', enableSorting: false, cell: ({ row }) => renderActions(row.original) },
+  ];
+
   return (
     <div>
       <div className="page-header">
-        <h1>Targets</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <TargetIcon size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h1>Targets</h1>
+        </div>
         <button
           className="btn btn-primary"
           onClick={() => {
@@ -253,7 +336,7 @@ export default function Targets() {
           )}
           <div className="form-group">
             <label>Kind</label>
-            <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-lg)' }}>
               <label style={{ fontWeight: 'normal' }}>
                 <input
                   type="radio"
@@ -276,12 +359,12 @@ export default function Targets() {
               </label>
             </div>
             {editingId && (
-              <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+              <p className="muted" style={{ fontSize: 13, marginTop: 'var(--ss-space-xs)' }}>
                 Kind and type are locked on edit — delete and recreate to change target shape.
               </p>
             )}
             {kind === 'discovery' && (
-              <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+              <p className="muted" style={{ fontSize: 13, marginTop: 'var(--ss-space-xs)' }}>
                 Discovery targets are fed to naabu → httpx → nuclei when the
                 Scans page kicks a discovery scan. The agent's allowlist YAML
                 is the ultimate gate — anything outside it is refused.
@@ -405,83 +488,18 @@ export default function Targets() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">Failed to load targets: {(error as Error).message}</p>}
-      {!isLoading && targets && targets.length === 0 && <p>No targets yet.</p>}
+      {!isLoading && !error && targets && targets.length === 0 && (
+        <EmptyState icon={<Crosshair />} title="No targets yet.">
+          <button className="btn btn-primary" onClick={() => setShowForm(true)}>New Target</button>
+        </EmptyState>
+      )}
       {targets && targets.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Technology</th>
-              <th>Name</th>
-              <th>Environment</th>
-              <th>Agent</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {targets.map((t) => (
-              <tr key={t.id}>
-                <td><span className="badge badge-type">{techLabel(t.type)}</span></td>
-                <td>{t.identifier}</td>
-                <td>{t.environment || '-'}</td>
-                <td>
-                  <select
-                    value={t.agent_id ?? ''}
-                    onChange={(e) =>
-                      assignAgentMutation.mutate({ id: t.id, agentId: e.target.value || undefined })
-                    }
-                    disabled={assignAgentMutation.isPending}
-                    title="Assign an agent to this target"
-                  >
-                    <option value="">— unassigned —</option>
-                    {agents?.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name} ({a.status})</option>
-                    ))}
-                  </select>
-                </td>
-                <td>{new Date(t.created_at).toLocaleString()}</td>
-                <td style={{ textAlign: 'right' }}>
-                  {probeResult[t.id] && (
-                    <span
-                      style={{
-                        marginRight: 8,
-                        fontSize: 12,
-                        color: probeResult[t.id].ok ? '#065f46' : '#b91c1c',
-                      }}
-                      title={probeResult[t.id].msg}
-                    >
-                      {probeResult[t.id].ok
-                        ? '✓ connected'
-                        : `✗ ${probeResult[t.id].msg.slice(0, 40)}${probeResult[t.id].msg.length > 40 ? '…' : ''}`}
-                    </span>
-                  )}
-                  {!isDiscoveryType(t.type) && (
-                    <>
-                      <button
-                        className="btn btn-sm"
-                        style={{ marginRight: 6 }}
-                        onClick={() => handleProbe(t.id)}
-                        disabled={probeBusy[t.id]}
-                        title="Send a lightweight connection test through the agent"
-                      >
-                        {probeBusy[t.id] ? 'Testing…' : 'Test'}
-                      </button>
-                      <button className="btn btn-sm" style={{ marginRight: 6 }} onClick={() => setCredTarget(t)}>
-                        Credential
-                      </button>
-                    </>
-                  )}
-                  <button className="btn btn-sm" style={{ marginRight: 6 }} onClick={() => handleEdit(t)}>
-                    Edit
-                  </button>
-                  <button className="btn btn-danger btn-sm" onClick={() => handleDelete(t.id)} disabled={deleteMutation.isPending}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={targets}
+          getRowId={(t) => t.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
       )}
 
       {credTarget && (
