@@ -210,6 +210,16 @@ transparency feature, not sensitive).
 2. **Role gating**: should viewers (non-admin) see the audit page? The
    data isn't secret, but it's verbose. My current lean: yes, they see
    it — transparency beats silos.
+   **RESOLVED 2026-06-14 (overrides the lean): ADMIN-ONLY, enforced on
+   both client and backend.** Once enriched with `ip`/`actor_email`/
+   `resource_label` (see Addendum), the audit surface carries enough
+   actor/network detail that admin-only is the safer default; transparency
+   doesn't outweigh exposing who-did-what-from-where to every member. The
+   tenant UI gates the page on `role == 'admin'` (a non-admin direct
+   `/audit` visit never mounts the fetch), and `GET /api/v1/audit-events`
+   enforces `claims.Role == 'admin'` (403 otherwise) so the API can't be
+   called directly by non-admins. Revisit if a read-only viewer role is
+   ever wanted.
 3. **Backfill from existing slog lines**: do we replay historical slog
    events into the table? My lean: no. Audit starts the moment the
    flag flips on, and we document that.
