@@ -1,8 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Activity, SearchX } from 'lucide-react';
 import { listScans, listScanDefinitions } from '../api/client';
 import type { Scan, ScanDefinition } from '../api/types';
 import ScanActivityDrawer from '../components/ScanActivityDrawer';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
@@ -54,13 +58,51 @@ export default function ScanActivity() {
     });
   }, [scans, defId, status, since, until]);
 
+  const columns: ColumnDef<Scan>[] = [
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (s) => s.status,
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    { id: 'type', header: 'Type', accessorFn: (s) => s.scan_type ?? 'compliance' },
+    {
+      id: 'target',
+      header: 'Target',
+      accessorFn: (s) => s.target_id ?? '',
+      cell: ({ row }) => (row.original.target_id ? `${row.original.target_id.slice(0, 8)}…` : '—'),
+    },
+    {
+      id: 'bundle',
+      header: 'Bundle',
+      accessorFn: (s) => s.bundle_id ?? '',
+      cell: ({ row }) => (row.original.bundle_id ? `${row.original.bundle_id.slice(0, 8)}…` : '—'),
+    },
+    {
+      // Sort chronologically on the raw ISO ts (lexicographic == chronological).
+      id: 'created',
+      header: 'Created',
+      accessorFn: (s) => s.created_at,
+      cell: ({ row }) => new Date(row.original.created_at).toLocaleString(),
+    },
+    {
+      id: 'completed',
+      header: 'Completed',
+      accessorFn: (s) => s.completed_at ?? '',
+      cell: ({ row }) => (row.original.completed_at ? new Date(row.original.completed_at).toLocaleString() : '—'),
+    },
+  ];
+
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h2 style={{ margin: 0 }}>Scan Activity</h2>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <Activity size={22} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h2 style={{ margin: 0 }}>Scan Activity</h2>
+        </div>
       </div>
 
-      <div className="form-card" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      <div className="form-card" style={{ display: 'flex', gap: 'var(--ss-space-md)', flexWrap: 'wrap' }}>
         <div>
           <label htmlFor="sa-def" style={{ display: 'block', fontSize: 12 }}>Definition</label>
           <select id="sa-def" value={defId} onChange={(e) => setDefId(e.target.value)}>
@@ -103,37 +145,18 @@ export default function ScanActivity() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">Failed to load: {(error as Error).message}</p>}
-      {!isLoading && filtered.length === 0 && <p>No scans match.</p>}
+      {!isLoading && !error && filtered.length === 0 && (
+        <EmptyState icon={<SearchX />} title="No scans match." />
+      )}
 
       {filtered.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Type</th>
-              <th>Target</th>
-              <th>Bundle</th>
-              <th>Created</th>
-              <th>Completed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((s) => (
-              <tr
-                key={s.id}
-                className="clickable-row"
-                onClick={() => setOpenScanId(s.id)}
-              >
-                <td><StatusBadge status={s.status} /></td>
-                <td>{s.scan_type ?? 'compliance'}</td>
-                <td>{s.target_id ? `${s.target_id.slice(0, 8)}…` : '—'}</td>
-                <td>{s.bundle_id ? `${s.bundle_id.slice(0, 8)}…` : '—'}</td>
-                <td>{new Date(s.created_at).toLocaleString()}</td>
-                <td>{s.completed_at ? new Date(s.completed_at).toLocaleString() : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={filtered}
+          getRowId={(s) => s.id}
+          onRowClick={(s) => setOpenScanId(s.id)}
+          initialSorting={[{ id: 'created', desc: true }]}
+        />
       )}
 
       {openScanId && (
