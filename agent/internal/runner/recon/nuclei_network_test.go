@@ -11,15 +11,34 @@ func TestClassifyTemplate(t *testing.T) {
 		wantService string
 		wantHTTP    bool
 	}{
+		// Clean canonical ids.
 		{"mssql-detect", "mssql", false},
 		{"postgres-detect", "postgresql", false},
 		{"redis-detect", "redis", false},
 		{"rdp-detection", "rdp", false},
-		{"http-detect", "http", true},   // web → httpx owns it
-		{"https-detect", "https", true}, // web → httpx owns it
-		// Unmapped community templates fall back to the stripped id, non-web.
-		{"maverick-ssh-detect", "maverick-ssh", false},
+		{"ftp-detect", "ftp", false},
+		{"imap-detect", "imap", false},
+		{"pop3-detect", "pop3", false},
+		// Web → httpx owns it.
+		{"http-detect", "http", true},
+		{"https-detect", "https", true},
+		// Real vendor-prefixed bundle ids MUST collapse to canonical families
+		// (the point of P1 — "all ssh"/"all ftp"/"all vnc" collections).
+		{"bitvise-ssh-detect", "ssh", false},
+		{"maverick-ssh-detect", "ssh", false},
+		{"mikrotik-ssh-detect", "ssh", false},
+		{"sshd-dropbear-detect", "ssh", false},
+		{"ws_ftp-ssh-detect", "ssh", false}, // SSH service of a WS_FTP product
+		{"xlight-ftp-service-detect", "ftp", false},
+		{"mikrotik-ftp-server-detect", "ftp", false},
+		{"vnc-service-detect", "vnc", false},
+		{"rsyncd-service-detect", "rsync", false},
+		{"aws-sftp-detect", "sftp", false},
+		{"moveit-sftp-detect", "sftp", false},
+		{"nfs-v3-exposed", "nfs", false},
+		// Genuinely-unknown (no family token) → fallback label, non-web.
 		{"weblogic-t3-detect", "weblogic-t3", false},
+		{"teamspeak3-detect", "teamspeak3", false},
 		{"some-new-service-detection", "some-new-service", false},
 		{"WeirdCase-Detect", "weirdcase", false},
 	}

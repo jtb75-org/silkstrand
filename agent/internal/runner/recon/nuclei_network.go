@@ -41,58 +41,74 @@ type NucleiNetworkHit struct {
 	Extracted  []string // extracted-results (banner / version strings)
 }
 
-// serviceClass is a template-id's canonical service + whether it's a web
-// (HTTP-family) protocol that httpx should own instead of nuclei-network.
-type serviceClass struct {
-	service    string
-	httpFamily bool
+// canonicalServices maps a service/protocol token (plus common aliases) to the
+// canonical asset_endpoints.service value collections filter on (service='ssh').
+// Canonicalizing FAMILIES is the whole point of P1: the real bundle is full of
+// vendor-prefixed ids (bitvise-ssh-detect, maverick-ssh-detect, ws_ftp-ssh-detect,
+// xlight-ftp-service-detect, vnc-service-detect, rsyncd-service-detect …) that
+// must all collapse to ssh/ftp/vnc/rsync — not fragment into per-vendor labels.
+var canonicalServices = map[string]string{
+	"ssh": "ssh", "sshd": "ssh", "openssh": "ssh", "dropbear": "ssh",
+	"ftp": "ftp", "ftps": "ftp", "ftpd": "ftp",
+	"sftp":   "sftp",
+	"telnet": "telnet",
+	"smtp":   "smtp", "smtpd": "smtp",
+	"imap": "imap", "pop3": "pop3",
+	"mssql": "mssql",
+	"mysql": "mysql", "mariadb": "mysql",
+	"postgres": "postgresql", "postgresql": "postgresql",
+	"mongodb": "mongodb", "mongo": "mongodb",
+	"redis":     "redis",
+	"memcached": "memcached",
+	"rdp":       "rdp",
+	"vnc":       "vnc",
+	"ldap":      "ldap", "ldaps": "ldap",
+	"rsync": "rsync", "rsyncd": "rsync",
+	"snmp":     "snmp",
+	"nfs":      "nfs",
+	"kafka":    "kafka",
+	"rabbitmq": "rabbitmq", "amqp": "rabbitmq",
+	"elasticsearch": "elasticsearch",
+	"rtsp":          "rtsp",
 }
 
-// networkServiceMap maps known network/detection template-ids to canonical
-// service names (ADR 009 D7). Built from the actual ids in the pinned bundle
-// (0.1.0 / upstream v10.4.1), not idealized names. Unmapped ids fall back to
-// the stripped template-id (classifyTemplate). httpFamily=true routes the port
-// to httpx and is NOT persisted (httpx owns web ports). Network/detection is
-// almost entirely non-web (http-detect lives under http/, run by nuclei-HTTP),
-// so httpFamily is a defensive guard.
-var networkServiceMap = map[string]serviceClass{
-	"mssql-detect":      {"mssql", false},
-	"postgres-detect":   {"postgresql", false},
-	"postgresql-detect": {"postgresql", false},
-	"mysql-detect":      {"mysql", false},
-	"mongodb-detect":    {"mongodb", false},
-	"redis-detect":      {"redis", false},
-	"ssh-detect":        {"ssh", false},
-	"openssh-detect":    {"ssh", false},
-	"ftp-detect":        {"ftp", false},
-	"smtp-detect":       {"smtp", false},
-	"imap-detect":       {"imap", false},
-	"pop3-detect":       {"pop3", false},
-	"rdp-detect":        {"rdp", false},
-	"rdp-detection":     {"rdp", false},
-	"vnc-detect":        {"vnc", false},
-	"memcached-detect":  {"memcached", false},
-	"rabbitmq-detect":   {"rabbitmq", false},
-	"kafka-detect":      {"kafka", false},
-	"ldap-detect":       {"ldap", false},
-	"telnet-detect":     {"telnet", false},
-	"rsync-detect":      {"rsync", false},
-	// Web protocols nuclei-network might surface — let httpx own these.
-	"http-detect":  {"http", true},
-	"https-detect": {"https", true},
+// httpFamilyTokens are web protocols httpx owns — routed to httpx, never
+// persisted by nuclei-network (defensive: http detection lives under http/, not
+// network/detection/, so these rarely fire here).
+var httpFamilyTokens = map[string]bool{"http": true, "https": true, "tls": true, "ssl": true}
+
+// detectNoise are tokens skipped during family detection so the protocol token
+// is reachable (vnc-service-detect → vnc, *-server-detect → the service).
+var detectNoise = map[string]bool{
+	"detect": true, "detection": true, "service": true,
+	"server": true, "transport": true, "exposed": true,
 }
 
-// classifyTemplate resolves a template-id to (service, httpFamily). Unmapped
-// ids fall back to the template-id with the -detect/-detection suffix stripped
-// (handles community templates without code changes), treated as non-web.
+// classifyTemplate resolves a template-id to (canonical service, httpFamily).
+// It scans tokens RIGHT-to-LEFT — the protocol token typically sits nearest the
+// -detect suffix (sshd-dropbear-detect → ssh, ws_ftp-ssh-detect → ssh) — and
+// returns the first canonical service or http-family token, with alias
+// collapsing so vendor variants resolve to one service. Genuinely-unknown
+// templates fall back to the detect-suffix-stripped id (community templates
+// still get a label without code changes).
 func classifyTemplate(templateID string) (service string, httpFamily bool) {
-	if c, ok := networkServiceMap[templateID]; ok {
-		return c.service, c.httpFamily
-	}
 	s := strings.ToLower(strings.TrimSpace(templateID))
-	s = strings.TrimSuffix(s, "-detection")
-	s = strings.TrimSuffix(s, "-detect")
-	return s, false
+	tokens := strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' })
+	for i := len(tokens) - 1; i >= 0; i-- {
+		t := tokens[i]
+		if detectNoise[t] {
+			continue
+		}
+		if httpFamilyTokens[t] {
+			return t, true
+		}
+		if canon, ok := canonicalServices[t]; ok {
+			return canon, false
+		}
+	}
+	fb := strings.TrimSuffix(s, "-detection")
+	fb = strings.TrimSuffix(fb, "-detect")
+	return fb, false
 }
 
 // portDecision is the per-port outcome after the whole detection pass.
