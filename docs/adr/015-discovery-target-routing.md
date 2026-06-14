@@ -63,7 +63,7 @@ First-class controls, set early rather than retrofitted:
 `asset_endpoints.service` + `version` (ADR 009 D3) + a `confidence`/`provenance` field hold the inventory signal **independently** of `findings`. Re-running with `inventory_only` still produces a full service map.
 
 ## Relationship to ADR 009
-ADR 009 provides the **service-detection stage** (nuclei-network over all ports, backfilling `service`/`version`). ADR 015 provides the **routing + policy + tiering + provenance** layer on top, and constrains how non-web *vuln* templates are selected. 009 D2 ("template selection") is subsumed by 015 D4's intrusiveness model.
+ADR 009 provides the **service-detection stage** (nuclei-network over all ports, backfilling `service`/`version`). ADR 015 provides the **routing + policy + tiering + provenance** layer on top, and constrains how non-web *vuln* templates are selected. 009 D2 remains the initial detection-template selection for the service-ID stage; ADR 015 **refines** future template selection with the D4 intrusiveness model before expanding beyond curated detection probes.
 
 ## Consequences
 - nuclei stays useful for non-web — as a **targeted, typed probe engine**, never the broad HTTP catalog against raw sockets.
@@ -74,6 +74,7 @@ ADR 009 provides the **service-detection stage** (nuclei-network over all ports,
 1. Engine for non-web service-ID: nuclei-network (ADR 009) vs a dedicated prober vs both per tier.
 2. Default `allowed_intrusiveness` for a new tenant/scan (lean conservative).
 3. Where the probe-classification catalog lives (bundle vs server config vs template metadata).
+4. Routing for **unknown / low-confidence** endpoints: pass to httpx fallback, run only T0, or stop at `inventory_unknown`? This is the escape hatch that keeps service-ID false negatives from *suppressing* HTTP enrichment (ADR 009 currently sends no-match ports to httpx as fallback).
 
 ## Scope / phasing
 - **P1** — service-ID over all ports + inventory storage with confidence/provenance (closes #377). Inventory-only is the safe default.

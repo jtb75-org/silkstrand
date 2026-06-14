@@ -20,7 +20,7 @@ A naive `replicas: N` on the current Deployment doesn't work:
 ## Decision
 
 ### D1. Pool/zone is the *scheduling boundary*; `agent_id` stays the worker identity
-Introduce an explicit **execution pool / zone** as the eligibility boundary. **Do not** make `agent_id` nullable or fuzzy — it remains the stable worker identity and **lease owner**. (Builds on ADR 013's agent *zones*.)
+Introduce an explicit **execution pool / zone** as the eligibility boundary. **Do not** make `agent_id` nullable or fuzzy — it remains the stable worker identity and **lease owner**. (Builds on ADR 013's agent *zones* — which today are install-time deployment metadata for overlap preview, **not** an execution pool; this ADR extends `zone` into an execution-eligibility boundary *only when pooled dispatch is enabled*.)
 
 ### D2. Two dispatch modes
 - **Pinned** (current): a scan's chunks are assigned to one `agent_id`. Keep it — it's the right choice for **network locality / route constraints**, deterministic *"agent A scans subnet A"* audit semantics, **per-agent credentials/policy**, and **hard per-agent rate limits** for fragile segments.
@@ -28,12 +28,12 @@ Introduce an explicit **execution pool / zone** as the eligibility boundary. **D
 
 ### D3. Lease-based chunk ownership
 Replace "`chunk.agent_id` = owner" with an explicit lease. `scan_chunks` gains:
-`pool_id`/`zone_id` (eligibility), `leased_by_agent_id`, `leased_at`, `lease_expires_at`, `lease_generation` (or `claim_token`), `attempt_count`.
+`pool_id`/`zone_id` (eligibility), `leased_by_agent_id`, `leased_at`, `lease_expires_at`, and `lease_generation` (or `claim_token`); retry bounds **reuse the existing `attempts` column** (#380), not a new parallel counter.
 - **Claim** (`ClaimNextScanChunk(pool, agent)`): selects an eligible chunk, sets `status=running`, `leased_by_agent_id`, `lease_expires_at`, bumps `lease_generation`.
 - **Complete / fail / reset** operate on `chunk_id` **AND** `lease_generation` (or `leased_by_agent_id` + `status`) — so a **stale owner cannot complete a chunk after losing its lease** to a re-claim. This is the generalization of the P2 "active-parent guard" from #380, now also guarding *ownership*.
 
 ### D4. Heartbeat-driven lease liveness
-Agent heartbeats **extend leases** for that agent's active chunks; the server derives liveness from `heartbeat + max_age`. Running chunks whose lease **expired** return to `pending` (or `failed`-retry by `attempt_count`). This generalizes #380's heartbeat-gated `ResetStaleRunningScanChunks` from "reset for a dead agent_id" to "reclaim expired leases."
+Agent heartbeats **extend leases** for that agent's active chunks; the server derives liveness from `heartbeat + max_age`. Running chunks whose lease **expired** return to `pending` (or `failed`-retry by `attempts`). This generalizes #380's heartbeat-gated `ResetStaleRunningScanChunks` from "reset for a dead agent_id" to "reclaim expired leases."
 
 ### D5. Idempotent chunk writes (prerequisite for safe retry)
 The agent **streams `asset_discovered` mid-chunk** (not only at the boundary), so a re-scanned chunk re-emits observations. Chunk retries are therefore safe **only with idempotent upserts** keyed by `(scan/asset identity)`. Assets already upsert by identity (ADR 006) — **endpoints and findings must be audited/enforced for the same** before pooling lands.
@@ -62,6 +62,7 @@ Never a shared credential across replicas. A **pool-join token** authorizes *enr
 1. Pool membership source of truth: declared (StatefulSet replicas) vs discovered (agents that joined with a pool token).
 2. Cross-pool scan eligibility (can a scan target multiple zones?) and credential scoping per pool.
 3. Lease duration + heartbeat-extension cadence vs nuclei's long (~20 min) silent stretches — leases must outlast a slow chunk without masking a dead worker.
+4. **Lease-extension authority:** do heartbeats extend *all* chunks leased by the agent, or only chunk IDs/generations the agent explicitly reports as **active**? Without active-chunk reporting, a partitioned or buggy worker keeps extending stale leases just by staying connected.
 
 ## Scope / phasing
 - **P1** — add lease columns + `lease_generation`; convert complete/fail/reset to lease-checked ops; keep **pinned** mode (strictly more correct, no behavior change). Audit endpoint/finding idempotency (D5).
