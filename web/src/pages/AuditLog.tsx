@@ -68,8 +68,26 @@ function targetFallback(ev: AuditEvent): string {
 
 export default function AuditLog() {
   const { active } = useAuth();
-  const isAdmin = active?.role === 'admin';
+  // Guard BEFORE mounting the fetching child, so a non-admin who navigates
+  // directly to /audit never instantiates the data hooks / fetch effect and
+  // therefore never calls listAuditEvents.
+  if (active?.role !== 'admin') {
+    return (
+      <div>
+        <PageHeader />
+        <EmptyState icon={<ScrollText />} title="The audit log is available to admins only." />
+      </div>
+    );
+  }
+  return <AuditLogContent />;
+}
 
+// This child holds the data hooks + fetch effect, so it only mounts for admins
+// — a non-admin visiting /audit directly never runs listAuditEvents (parity with
+// the old Settings sub-tab, which never mounted AuditTab for non-admins).
+// Backend role-gating of the endpoint is the open ADR question (ADR 005 OQ#2)
+// and intentionally out of scope here.
+function AuditLogContent() {
   const [items, setItems] = useState<AuditEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
@@ -165,15 +183,6 @@ export default function AuditLog() {
       ),
     },
   ];
-
-  if (!isAdmin) {
-    return (
-      <div>
-        <PageHeader />
-        <EmptyState icon={<ScrollText />} title="The audit log is available to admins only." />
-      </div>
-    );
-  }
 
   return (
     <div>
