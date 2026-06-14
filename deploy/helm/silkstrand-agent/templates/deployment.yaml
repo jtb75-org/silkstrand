@@ -1,3 +1,4 @@
+{{- include "silkstrand-agent.validateReplicas" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,6 +28,8 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # The agent is outbound-only and never calls the Kubernetes API.
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- if .Values.hostNetwork }}
@@ -37,6 +40,14 @@ spec:
         - name: agent
           image: {{ include "silkstrand-agent.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+            # NOT readOnlyRootFilesystem: the agent writes recon tools to
+            # /home/nonroot/runtimes on first scan.
           env:
             # Enrollment: whichever keys exist in the secret win (optional refs).
             - name: SILKSTRAND_INSTALL_TOKEN
@@ -66,10 +77,6 @@ spec:
             {{- if .Values.agent.name }}
             - name: SILKSTRAND_AGENT_NAME
               value: {{ .Values.agent.name | quote }}
-            {{- end }}
-            {{- if .Values.agent.zone }}
-            - name: SILKSTRAND_ZONE
-              value: {{ .Values.agent.zone | quote }}
             {{- end }}
             - name: SILKSTRAND_LOG_LEVEL
               value: {{ .Values.agent.logLevel | quote }}

@@ -34,4 +34,8 @@ spec:
       ports:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
+    {{- with .Values.networkPolicy.extraEgress }}
+    # Operator-supplied egress (HTTPS proxy, custom CA, NTP, …)
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

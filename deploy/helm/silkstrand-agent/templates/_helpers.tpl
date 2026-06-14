@@ -39,13 +39,29 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* Validate that exactly one enrollment method is supplied (unless existingSecret). */}}
+{{/* Validate that EXACTLY one enrollment method is supplied (unless existingSecret). */}}
 {{- define "silkstrand-agent.validateAuth" -}}
 {{- if not .Values.auth.existingSecret -}}
 {{- $tok := .Values.auth.installToken -}}
-{{- $pair := and .Values.auth.agentId .Values.auth.agentKey -}}
+{{- $id := .Values.auth.agentId -}}
+{{- $key := .Values.auth.agentKey -}}
+{{- $pair := and $id $key -}}
 {{- if and (not $tok) (not $pair) -}}
 {{- fail "silkstrand-agent: set auth.installToken OR (auth.agentId + auth.agentKey) OR auth.existingSecret" -}}
 {{- end -}}
+{{- if and $tok $pair -}}
+{{- fail "silkstrand-agent: set auth.installToken OR auth.agentId+agentKey, not both (explicit id/key would override the bootstrapped identity)" -}}
+{{- end -}}
+{{- if or (and $id (not $key)) (and $key (not $id)) -}}
+{{- fail "silkstrand-agent: auth.agentId and auth.agentKey must be set together" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Single identity + RWO creds: >1 replica would share creds / dup the WSS
+     session. Pools require per-agent identity + pool-join tokens (ADR 016). */}}
+{{- define "silkstrand-agent.validateReplicas" -}}
+{{- if gt (int .Values.replicaCount) 1 -}}
+{{- fail "silkstrand-agent: replicaCount > 1 is unsupported (one identity + a RWO creds PVC). Horizontal pools need per-agent identity + pool-join tokens — see ADR 016." -}}
 {{- end -}}
 {{- end -}}

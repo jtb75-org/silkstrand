@@ -36,7 +36,8 @@ apiUrl: "wss://api.silkstrand.io"
 agent:
   # Display name; defaults to the pod hostname when empty.
   name: ""
-  zone: ""
+  # NOTE: agent zone is NOT set here — the agent takes its zone from the
+  # install-token metadata at bootstrap. Mint the token with the zone.
   logLevel: "info"
   # naabu scan type: "c" (connect) is baked into the image and is the safe
   # default in NAT'd pods. Set "s" (SYN) only on a privileged host network.
@@ -70,6 +71,13 @@ networkPolicy:
   extraScanCidrs: []
   # DNS: namespace label selector for the cluster DNS namespace.
   dnsNamespace: kube-system
+  # Extra raw egress rules — for an HTTPS proxy (:8080/:3128), a custom-CA
+  # host, NTP, etc. The built-in rules only allow :443. NOTE: a NetworkPolicy
+  # does NOT firewall image pulls (kubelet/node egress) and may not apply to
+  # hostNetwork pods on some CNIs.
+  extraEgress: []
+  #  - to: [{ ipBlock: { cidr: 10.0.0.5/32 } }]
+  #    ports: [{ port: 3128, protocol: TCP }]
 
 # Resources — sized from observed usage (naabu/httpx ~I/O-bound; nuclei bursts
 # to ~0.5 core / ~450Mi). Limits give headroom for larger scopes.
