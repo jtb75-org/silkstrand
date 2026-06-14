@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.9.1
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/microsoft/go-mssqldb v1.9.8
 	go.mongodb.org/mongo-driver/v2 v2.5.0
 	gopkg.in/yaml.v3 v3.0.1
