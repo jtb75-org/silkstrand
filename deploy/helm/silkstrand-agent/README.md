@@ -31,7 +31,7 @@ Mint the install token from the tenant UI (Agents → Add Agent) or the API.
 | `persistence.enabled` | `true` | Creds PVC → identity survives restarts (resume). Disable only for ephemeral agents with a reusable token. |
 | `networkPolicy.enabled` | `true` | Egress allow: internet `:443` (Cloudflare WSS + recon download) + LAN scan CIDRs + DNS. Needed in default-deny-egress namespaces. |
 | `imagePullSecrets` | `[]` | The agent registry needs auth (#369). |
-| `resources` | `req 100m/256Mi · lim 1/1Gi` | Sized from measured usage (nuclei bursts to ~0.5 core/~450Mi). |
+| `resources` | `req 100m/256Mi · lim 1/2Gi` | Sized from measured usage; nuclei can burst past 1Gi on URL-dense chunks (observed OOMKill at 1Gi in a live /26 discovery), so the memory limit is 2Gi. |
 | `replicaCount` | `1` | **Keep at 1.** Multi-agent pools are ADR 016 (proposed) (per-member identity + pool-join token), not this chart. |
 
 ## NetworkPolicy boundary (read before relying on it)

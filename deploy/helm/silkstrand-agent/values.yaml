@@ -79,15 +79,16 @@ networkPolicy:
   #  - to: [{ ipBlock: { cidr: 10.0.0.5/32 } }]
   #    ports: [{ port: 3128, protocol: TCP }]
 
-# Resources — sized from observed usage (naabu/httpx ~I/O-bound; nuclei bursts
-# to ~0.5 core / ~450Mi). Limits give headroom for larger scopes.
+# Resources — sized from observed usage (naabu/httpx ~I/O-bound; nuclei can
+# burst past 1Gi on URL-dense chunks (observed OOMKill at 1Gi in a live /26
+# discovery)). Limit set to 2Gi for headroom; requests stay modest.
 resources:
   requests:
     cpu: 100m
     memory: 256Mi
   limits:
     cpu: "1"
-    memory: 1Gi
+    memory: 2Gi
 
 # nonroot uid/gid baked into the agent image.
 podSecurityContext:
