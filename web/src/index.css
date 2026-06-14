@@ -198,6 +198,25 @@ a:hover {
   cursor: pointer;
 }
 
+/* Empty states (design-system §5.7) — shared by <EmptyState />. */
+.ss-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ss-space-md);
+  padding: var(--ss-space-3xl) var(--ss-space-xl);
+  color: var(--ss-text-muted);
+  text-align: center;
+}
+.ss-empty .icon {
+  display: inline-flex;
+  color: var(--ss-text-muted);
+}
+.ss-empty .icon svg {
+  width: 40px;
+  height: 40px;
+}
+
 /* Badges */
 
 .badge {

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Boxes, Check, X, Package, Unplug, SearchX } from 'lucide-react';
 import {
   listAssets,
   listAssetEndpoints,
@@ -22,6 +24,8 @@ import AssetsFilterChips, { type ChipId } from '../components/AssetsFilterChips'
 import AssetDetailDrawer from '../components/AssetDetailDrawer';
 import AssetsBulkActions from '../components/AssetsBulkActions';
 import PredicateBuilder, { type Predicate } from '../components/PredicateBuilder';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 import { formatAbsolute, formatRelative } from '../lib/time';
 
 // Three tabs over one filtered population per docs/plans/ui-shape.md §Assets:
@@ -31,6 +35,10 @@ import { formatAbsolute, formatRelative } from '../lib/time';
 // Multi-select persists across tabs and drives the Bulk Actions bar.
 
 type TabId = 'assets' | 'endpoints' | 'findings';
+
+// Severity sorts by risk rank, not alphabetically (critical > … > info).
+const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+const sevRank = (s?: string | null) => (s ? SEV_RANK[s.toLowerCase()] ?? 0 : 0);
 
 function chipsToParams(chips: Set<ChipId>): AssetFilterParams {
   const p: AssetFilterParams = {};
@@ -90,22 +98,26 @@ function assetIP(a: DiscoveredAsset): string {
   return a.primary_ip || a.ip || '-';
 }
 
-/** Coverage indicator per design-system.md: checkmark/cross with accessible labels. */
+/** Coverage indicator per design-system.md §6: Lucide check/cross, token color,
+ *  accessible labels on each wrapper (the glyphs themselves are decorative). */
 function CoverageIndicator({ scan, creds }: { scan: boolean; creds: boolean }) {
   return (
-    <span title={`Scan ${scan ? 'configured' : 'missing'} · Creds ${creds ? 'mapped' : 'missing'}`}>
+    <span
+      title={`Scan ${scan ? 'configured' : 'missing'} · Creds ${creds ? 'mapped' : 'missing'}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}
+    >
       <span
-        style={{ color: scan ? '#10b981' : '#ef4444' }}
+        style={{ display: 'inline-flex', color: scan ? 'var(--ss-success)' : 'var(--ss-danger)' }}
         aria-label={scan ? 'Scan configured' : 'Scan missing'}
       >
-        {scan ? '\u2713' : '\u2717'}
+        {scan ? <Check size={16} aria-hidden="true" /> : <X size={16} aria-hidden="true" />}
       </span>
-      <span style={{ margin: '0 4px' }}>/</span>
+      <span aria-hidden="true">/</span>
       <span
-        style={{ color: creds ? '#10b981' : '#ef4444' }}
+        style={{ display: 'inline-flex', color: creds ? 'var(--ss-success)' : 'var(--ss-danger)' }}
         aria-label={creds ? 'Credentials mapped' : 'Credentials missing'}
       >
-        {creds ? '\u2713' : '\u2717'}
+        {creds ? <Check size={16} aria-hidden="true" /> : <X size={16} aria-hidden="true" />}
       </span>
     </span>
   );
@@ -128,6 +140,10 @@ function deriveCoverage(a: DiscoveredAsset): { scan: boolean; creds: boolean } {
     scan: !!legacy.scan_configured,
     creds: !!legacy.creds_mapped,
   };
+}
+
+function LastSeen({ ts }: { ts: string }) {
+  return <span title={formatAbsolute(ts)}>{formatRelative(ts)}</span>;
 }
 
 export default function Assets() {
@@ -243,6 +259,17 @@ export default function Assets() {
     });
   }
 
+  // Header select-all. `ids` is the current rendered row set (DataTable hands us
+  // post-sort rows); selection persists across tabs so we never auto-clear.
+  function toggleAll(ids: string[], checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) ids.forEach((id) => next.add(id));
+      else ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }
+
   const items = assets?.items ?? [];
   const total = assets?.total ?? 0;
   const scanRunning = !!qc
@@ -251,12 +278,23 @@ export default function Assets() {
 
   return (
     <div>
-      <div className="page-header">
+      <div
+        className="page-header"
+        style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}
+      >
+        <Boxes size={24} style={{ color: 'var(--ss-accent-primary)' }} />
         <h1>Assets</h1>
       </div>
 
       {/* Primary filter row: search + collection + Save-as-Collection */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 'var(--ss-space-sm)',
+          alignItems: 'center',
+          marginBottom: 'var(--ss-space-md)',
+        }}
+      >
         <input
           type="search"
           placeholder="Search hosts, IPs, services…"
@@ -292,7 +330,7 @@ export default function Assets() {
         scanRunning={scanRunning}
       />
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: 12 }}>
+      <div className="tab-bar" role="tablist" style={{ marginBottom: 'var(--ss-space-md)' }}>
         <TabBtn id="assets" cur={tab} onClick={selectTab}>Assets</TabBtn>
         <TabBtn id="endpoints" cur={tab} onClick={selectTab}>Endpoints</TabBtn>
         <TabBtn id="findings" cur={tab} onClick={selectTab}>Findings</TabBtn>
@@ -310,6 +348,7 @@ export default function Assets() {
           items={items}
           selected={selected}
           onToggle={toggleRow}
+          onToggleAll={toggleAll}
           onSelect={selectAsset}
         />
       )}
@@ -318,6 +357,7 @@ export default function Assets() {
           items={endpoints?.items ?? []}
           selected={selected}
           onToggle={toggleRow}
+          onToggleAll={toggleAll}
           onSelect={(assetId: string) => selectAsset(assetId)}
         />
       )}
@@ -342,7 +382,7 @@ export default function Assets() {
         <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
           <div className="form-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Import DNS names</h3>
-            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            <p className="muted" style={{ marginTop: 0, fontSize: 'var(--ss-text-body-sm)' }}>
               Discover websites behind a shared ingress / reverse proxy. Each name
               becomes its own asset (a <code>*.example.com</code> wildcard authorizes
               but creates no asset). Paste one per line.
@@ -352,10 +392,10 @@ export default function Assets() {
               placeholder={'app.example.com\napi.example.com\n*.internal.example.com'}
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              style={{ width: '100%', fontFamily: 'monospace', fontSize: 13 }}
+              style={{ width: '100%', fontFamily: 'monospace', fontSize: 'var(--ss-text-body-sm)' }}
             />
             {importResult && (
-              <div style={{ marginTop: 12, fontSize: 13 }}>
+              <div style={{ marginTop: 'var(--ss-space-md)', fontSize: 'var(--ss-text-body-sm)' }}>
                 <p style={{ margin: '0 0 6px' }}>
                   <strong>{importResult.imported.length}</strong> imported
                   {importResult.wildcards.length > 0 && <>, <strong>{importResult.wildcards.length}</strong> wildcard(s)</>}
@@ -374,7 +414,7 @@ export default function Assets() {
                       Add these to the agent's <code>scan-allowlist.yaml</code> so they
                       actually scan (the host file is authoritative):
                     </p>
-                    <pre style={{ background: '#f3f4f6', padding: 10, borderRadius: 6, userSelect: 'all', overflowX: 'auto', margin: 0 }}>
+                    <pre style={{ background: 'var(--ss-bg-raised)', padding: 10, borderRadius: 'var(--ss-radius-md)', userSelect: 'all', overflowX: 'auto', margin: 0 }}>
 {'allow:\n' + importResult.allowlist_entries.map((e) => `  - ${e}`).join('\n')}
                     </pre>
                   </>
@@ -384,7 +424,7 @@ export default function Assets() {
             {importMutation.error && (
               <p className="error">{(importMutation.error as Error).message}</p>
             )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', justifyContent: 'flex-end', marginTop: 'var(--ss-space-lg)' }}>
               <button className="btn" onClick={() => setImportOpen(false)}>Close</button>
               <button
                 className="btn btn-primary"
@@ -421,7 +461,7 @@ function TabBtn({
       role="tab"
       aria-selected={cur === id}
       className={`btn btn-sm ${cur === id ? 'btn-primary' : ''}`}
-      style={{ marginRight: 8 }}
+      style={{ marginRight: 'var(--ss-space-sm)' }}
       onClick={() => onClick(id)}
     >
       {children}
@@ -434,70 +474,72 @@ function AssetsView({
   items,
   selected,
   onToggle,
+  onToggleAll,
   onSelect,
 }: {
   items: DiscoveredAsset[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  onToggleAll: (ids: string[], checked: boolean) => void;
   onSelect: (id: string) => void;
 }) {
+  const columns: ColumnDef<DiscoveredAsset>[] = [
+    { id: 'host', header: 'Host', accessorFn: (a) => assetHost(a) },
+    { id: 'ip', header: 'IP', accessorFn: (a) => assetIP(a) },
+    { id: 'type', header: 'Type', accessorFn: (a) => a.resource_type || '-' },
+    { id: 'env', header: 'Env', accessorFn: (a) => a.environment || '-' },
+    {
+      id: 'endpoints',
+      header: '#Endpoints',
+      accessorFn: (a) => a.endpoints_count ?? 0,
+    },
+    {
+      id: 'severity',
+      header: 'Max severity',
+      accessorFn: (a) => topSeverity(a) ?? '',
+      cell: ({ row }) => {
+        const sev = topSeverity(row.original);
+        return sev ? <span className={severityBadgeClass(sev)}>{sev}</span> : '-';
+      },
+      sortingFn: (a, b) => sevRank(topSeverity(a.original)) - sevRank(topSeverity(b.original)),
+    },
+    {
+      id: 'coverage',
+      header: 'Coverage',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const cov = deriveCoverage(row.original);
+        return <CoverageIndicator scan={cov.scan} creds={cov.creds} />;
+      },
+    },
+    {
+      id: 'last_seen',
+      header: 'Last seen',
+      accessorFn: (a) => a.last_seen,
+      cell: ({ row }) => <LastSeen ts={row.original.last_seen} />,
+    },
+  ];
+
   if (items.length === 0)
     return (
-      <div className="ss-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '48px 24px', color: '#6b7280', textAlign: 'center' }}>
-        <span style={{ fontSize: 40 }}>&#x1F4E6;</span>
-        <span>No assets found. Create a target or trigger a discovery scan.</span>
-      </div>
+      <EmptyState
+        icon={<Package />}
+        title="No assets found. Create a target or trigger a discovery scan."
+      />
     );
+
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th style={{ width: 32 }}></th>
-          <th>Host</th>
-          <th>IP</th>
-          <th>Type</th>
-          <th>Env</th>
-          <th>#Endpoints</th>
-          <th>Max severity</th>
-          <th>Coverage</th>
-          <th>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((a) => {
-          const sev = topSeverity(a);
-          const cov = deriveCoverage(a);
-          return (
-            <tr
-              key={a.id}
-              className="clickable-row"
-              onClick={() => onSelect(a.id)}
-            >
-              <td onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={selected.has(a.id)}
-                  onChange={() => onToggle(a.id)}
-                  aria-label={`Select ${assetHost(a)}`}
-                />
-              </td>
-              <td>{assetHost(a)}</td>
-              <td>{assetIP(a)}</td>
-              <td>{a.resource_type || '-'}</td>
-              <td>{a.environment || '-'}</td>
-              <td>{a.endpoints_count ?? 0}</td>
-              <td>
-                {sev ? <span className={severityBadgeClass(sev)}>{sev}</span> : '-'}
-              </td>
-              <td>
-                <CoverageIndicator scan={cov.scan} creds={cov.creds} />
-              </td>
-              <td title={formatAbsolute(a.last_seen)}>{formatRelative(a.last_seen)}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      data={items}
+      getRowId={(a) => a.id}
+      selectable
+      selectedIds={selected}
+      onToggleRow={onToggle}
+      onToggleAll={onToggleAll}
+      onRowClick={(a) => onSelect(a.id)}
+      initialSorting={[{ id: 'severity', desc: true }]}
+    />
   );
 }
 
@@ -507,69 +549,67 @@ function EndpointsView({
   items,
   selected,
   onToggle,
+  onToggleAll,
   onSelect,
 }: {
   items: AssetEndpointRow[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  onToggleAll: (ids: string[], checked: boolean) => void;
   onSelect: (assetId: string) => void;
 }) {
+  const columns: ColumnDef<AssetEndpointRow>[] = [
+    { id: 'host', header: 'Host', accessorFn: (ep) => ep.host || ep.ip || '-' },
+    { id: 'ip_port', header: 'IP:Port', accessorFn: (ep) => `${ep.ip}:${ep.port}` },
+    { id: 'service', header: 'Service', accessorFn: (ep) => ep.service || '-' },
+    {
+      id: 'tech',
+      header: 'Tech',
+      enableSorting: false,
+      accessorFn: (ep) => ep.technologies?.join(', ') || '-',
+    },
+    {
+      id: 'findings',
+      header: 'Findings',
+      accessorFn: (ep) => ep.findings_count,
+      cell: ({ row }) =>
+        row.original.findings_count > 0
+          ? <span className="badge badge-cve-medium">{row.original.findings_count}</span>
+          : '-',
+    },
+    {
+      id: 'coverage',
+      header: 'Coverage',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <CoverageIndicator
+          scan={row.original.coverage?.has_scan_definition ?? false}
+          creds={row.original.coverage?.has_credential_mapping ?? false}
+        />
+      ),
+    },
+    {
+      id: 'last_seen',
+      header: 'Last seen',
+      accessorFn: (ep) => ep.last_seen,
+      cell: ({ row }) => <LastSeen ts={row.original.last_seen} />,
+    },
+  ];
+
   if (items.length === 0)
-    return (
-      <div className="ss-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '48px 24px', color: '#6b7280', textAlign: 'center' }}>
-        <span style={{ fontSize: 40 }}>&#x1F50C;</span>
-        <span>No endpoints found.</span>
-      </div>
-    );
+    return <EmptyState icon={<Unplug />} title="No endpoints found." />;
+
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th style={{ width: 32 }}></th>
-          <th>Host</th>
-          <th>IP:Port</th>
-          <th>Service</th>
-          <th>Tech</th>
-          <th>Findings</th>
-          <th>Coverage</th>
-          <th>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((ep) => (
-          <tr
-            key={ep.id}
-            className="clickable-row"
-            onClick={() => onSelect(ep.asset_id)}
-          >
-            <td onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
-                checked={selected.has(ep.id)}
-                onChange={() => onToggle(ep.id)}
-                aria-label={`Select ${ep.host || ep.ip}:${ep.port}`}
-              />
-            </td>
-            <td>{ep.host || ep.ip || '-'}</td>
-            <td>{ep.ip}:{ep.port}</td>
-            <td>{ep.service || '-'}</td>
-            <td>{ep.technologies?.join(', ') || '-'}</td>
-            <td>
-              {ep.findings_count > 0
-                ? <span className="badge badge-cve-medium">{ep.findings_count}</span>
-                : '-'}
-            </td>
-            <td>
-              <CoverageIndicator
-                scan={ep.coverage?.has_scan_definition ?? false}
-                creds={ep.coverage?.has_credential_mapping ?? false}
-              />
-            </td>
-            <td title={formatAbsolute(ep.last_seen)}>{formatRelative(ep.last_seen)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      data={items}
+      getRowId={(ep) => ep.id}
+      selectable
+      selectedIds={selected}
+      onToggleRow={onToggle}
+      onToggleAll={onToggleAll}
+      onRowClick={(ep) => onSelect(ep.asset_id)}
+    />
   );
 }
 
@@ -602,36 +642,38 @@ function FindingsView({ items }: { items: DiscoveredAsset[] }) {
       });
     }
   }
+
+  const columns: ColumnDef<Row>[] = [
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (r) => r.severity,
+      cell: ({ row }) => <span className={severityBadgeClass(row.original.severity)}>{row.original.severity}</span>,
+      sortingFn: (a, b) => sevRank(a.original.severity) - sevRank(b.original.severity),
+    },
+    { id: 'title', header: 'Title', accessorKey: 'title' },
+    { id: 'source', header: 'Source', accessorKey: 'source' },
+    { id: 'asset', header: 'Asset', accessorKey: 'asset' },
+    {
+      id: 'last_seen',
+      header: 'Last seen',
+      accessorFn: (r) => r.lastSeen,
+      cell: ({ row }) => <LastSeen ts={row.original.lastSeen} />,
+    },
+  ];
+
   if (rows.length === 0)
     return (
-      <div className="ss-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '48px 24px', color: '#6b7280', textAlign: 'center' }}>
-        <span style={{ fontSize: 40 }}>&#x1F50D;</span>
-        <span>No findings in the current filtered population.</span>
-      </div>
+      <EmptyState icon={<SearchX />} title="No findings in the current filtered population." />
     );
+
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th>Severity</th>
-          <th>Title</th>
-          <th>Source</th>
-          <th>Asset</th>
-          <th>Last seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.key}>
-            <td><span className={severityBadgeClass(r.severity)}>{r.severity}</span></td>
-            <td>{r.title}</td>
-            <td>{r.source}</td>
-            <td>{r.asset}</td>
-            <td title={formatAbsolute(r.lastSeen)}>{formatRelative(r.lastSeen)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      data={rows}
+      getRowId={(r) => r.key}
+      initialSorting={[{ id: 'severity', desc: true }]}
+    />
   );
 }
 
