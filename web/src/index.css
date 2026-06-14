@@ -1,7 +1,10 @@
 /* ---------------------------------------------------------------------------
-   Design-system tokens (ADR 018 / design-system.md §3). Light is the default on
-   :root; dark values live under [data-theme="dark"], inert until a theme switch
-   is wired (§9 Phase 2). New code uses var(--ss-*); existing code is untouched.
+   Design-system tokens (ADR 018 / design-system.md §3–4): color, spacing,
+   radius, shadow, motion, and typography (sizes / weights / line-heights).
+   Light is the default on :root; dark values live under [data-theme="dark"],
+   inert until a theme switch is wired (§9 Phase 2). Typography is theme-
+   independent, so it lives on :root only. New code uses var(--ss-*); existing
+   code is untouched.
 --------------------------------------------------------------------------- */
 :root {
   /* Accent — brand blue (shared across themes) */
@@ -42,6 +45,24 @@
   /* Motion */
   --ss-transition-fast: 120ms ease;
   --ss-transition-base: 180ms ease;
+  /* Typography — sizes (§4.2). Semantic, not shirt-sized. */
+  --ss-text-caption: 12px;
+  --ss-text-body-sm: 13px;
+  --ss-text-body:    14px;
+  --ss-text-body-lg: 16px;
+  --ss-text-h4:      16px;
+  --ss-text-h3:      18px;
+  --ss-text-h2:      22px;
+  --ss-text-h1:      28px;
+  /* Typography — weights (§4.3) */
+  --ss-font-regular:  400;
+  --ss-font-medium:   500;
+  --ss-font-semibold: 600;
+  --ss-font-bold:     700;
+  /* Typography — line-heights (§4.4) */
+  --ss-leading-tight:  1.2;
+  --ss-leading-normal: 1.5;
+  --ss-leading-loose:  1.7;
 }
 :root[data-theme="dark"] {
   --ss-bg-base:    #0f172a;
