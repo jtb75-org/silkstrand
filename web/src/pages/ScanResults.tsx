@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { ClipboardCheck, SearchX } from 'lucide-react';
 import { getScan, listFindings, getScanFacts, replayEvaluation } from '../api/client';
 import type { CollectedFactsEntry } from '../api/client';
 import type { Scan, ScanResult, Finding } from '../api/types';
 import AgentLogConsole from '../components/AgentLogConsole';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 type ResultsTab = 'overview' | 'findings' | 'facts' | 'console';
 
@@ -12,6 +16,9 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
 }
 
+// Control status / summary-segment colors live as CSS classes (badge-control-*,
+// segment-*) in index.css — they're class-based here, so there are no inline
+// colors to sweep for those; the classes are preserved as-is.
 function ControlStatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-control-${status}`}>{status}</span>;
 }
@@ -53,42 +60,29 @@ function SummaryBar({ scan }: { scan: Scan }) {
   );
 }
 
-function ResultRow({ result }: { result: ScanResult }) {
-  const [expanded, setExpanded] = useState(false);
-
+// Per-control detail (evidence / remediation). The legacy table rendered this
+// as a sibling expanded <tr>; DataTable owns its <tbody> (no row-expand API),
+// so it renders below the table for the single active control — same family as
+// the Bundles ControlsPanel substitute.
+function ResultDetail({ result }: { result: ScanResult }) {
   return (
-    <>
-      <tr className="clickable-row" onClick={() => setExpanded(!expanded)}>
-        <td>{result.control_id}</td>
-        <td>{result.title}</td>
-        <td>
-          <ControlStatusBadge status={result.status} />
-        </td>
-        <td>{result.severity || '-'}</td>
-        <td className="expand-indicator">{expanded ? '-' : '+'}</td>
-      </tr>
-      {expanded && (
-        <tr className="expanded-row">
-          <td colSpan={5}>
-            {result.evidence && (
-              <div className="result-detail">
-                <strong>Evidence:</strong>
-                <pre>{JSON.stringify(result.evidence, null, 2)}</pre>
-              </div>
-            )}
-            {result.remediation && (
-              <div className="result-detail">
-                <strong>Remediation:</strong>
-                <p>{result.remediation}</p>
-              </div>
-            )}
-            {!result.evidence && !result.remediation && (
-              <p className="text-muted">No additional details.</p>
-            )}
-          </td>
-        </tr>
+    <div className="expanded-row" style={{ marginTop: 'var(--ss-space-md)' }}>
+      {result.evidence && (
+        <div className="result-detail">
+          <strong>Evidence:</strong>
+          <pre>{JSON.stringify(result.evidence, null, 2)}</pre>
+        </div>
       )}
-    </>
+      {result.remediation && (
+        <div className="result-detail">
+          <strong>Remediation:</strong>
+          <p>{result.remediation}</p>
+        </div>
+      )}
+      {!result.evidence && !result.remediation && (
+        <p className="text-muted">No additional details.</p>
+      )}
+    </div>
   );
 }
 
@@ -98,38 +92,65 @@ function FindingsTab({ scanId }: { scanId: string }) {
     queryFn: () => listFindings({ scan_id: scanId }),
   });
 
+  const columns: ColumnDef<Finding>[] = [
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (f) => f.severity ?? '',
+      cell: ({ row }) => (
+        <span className={`badge badge-sev-${(row.original.severity ?? '').toLowerCase()}`}>
+          {row.original.severity ?? '—'}
+        </span>
+      ),
+    },
+    { id: 'title', header: 'Title', accessorFn: (f) => f.title },
+    {
+      id: 'source',
+      header: 'Source',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span title={row.original.source_kind}>
+          {row.original.source}{row.original.source_id ? ` / ${row.original.source_id}` : ''}
+        </span>
+      ),
+    },
+    {
+      id: 'endpoint',
+      header: 'Endpoint',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const f = row.original;
+        const label = f.asset_hostname || f.asset_ip || f.asset_endpoint_id.slice(0, 8) + '…';
+        return `${label}${f.endpoint_port != null ? `:${f.endpoint_port}` : ''}`;
+      },
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (f) => f.status,
+      cell: ({ row }) => <span className={`badge badge-${row.original.status}`}>{row.original.status}</span>,
+    },
+    {
+      id: 'last_seen',
+      header: 'Last Seen',
+      accessorFn: (f) => f.last_seen,
+      cell: ({ row }) => new Date(row.original.last_seen).toLocaleString(),
+    },
+  ];
+
   if (isLoading) return <p>Loading findings…</p>;
   if (error) return <p className="error">Failed to load findings: {(error as Error).message}</p>;
-  if (!data || data.length === 0) return <p>No findings for this scan.</p>;
+  if (!data || data.length === 0) {
+    return <EmptyState icon={<SearchX />} title="No findings for this scan." />;
+  }
 
   return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th>Severity</th>
-          <th>Title</th>
-          <th>Source</th>
-          <th>Endpoint</th>
-          <th>Status</th>
-          <th>Last Seen</th>
-        </tr>
-      </thead>
-      <tbody>
-        {data.map((f) => (
-          <tr key={f.id}>
-            <td><span className={`badge badge-sev-${(f.severity ?? '').toLowerCase()}`}>{f.severity ?? '—'}</span></td>
-            <td>{f.title}</td>
-            <td title={f.source_kind}>{f.source}{f.source_id ? ` / ${f.source_id}` : ''}</td>
-            <td>
-              {(f.asset_hostname || f.asset_ip || f.asset_endpoint_id.slice(0, 8) + '…')}
-              {f.endpoint_port != null ? `:${f.endpoint_port}` : ''}
-            </td>
-            <td><span className={`badge badge-${f.status}`}>{f.status}</span></td>
-            <td>{new Date(f.last_seen).toLocaleString()}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      data={data}
+      getRowId={(f) => f.id}
+      initialSorting={[{ id: 'severity', desc: false }]}
+    />
   );
 }
 
@@ -160,9 +181,21 @@ export default function ScanResults() {
         Back to Scans
       </Link>
 
-      <h1>Scan Results</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+        <ClipboardCheck size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+        <h1 style={{ margin: 0 }}>Scan Results</h1>
+      </div>
 
-      <div className="tabbar" style={{ display: 'flex', gap: 16, borderBottom: '1px solid #e5e7eb', marginBottom: 16 }}>
+      <div
+        className="tabbar"
+        style={{
+          display: 'flex',
+          gap: 'var(--ss-space-lg)',
+          borderBottom: '1px solid var(--ss-border-default)',
+          marginBottom: 'var(--ss-space-lg)',
+          marginTop: 'var(--ss-space-lg)',
+        }}
+      >
         {(['overview', 'findings', 'facts', 'console'] as ResultsTab[]).map((t) => (
           <button
             key={t}
@@ -170,10 +203,10 @@ export default function ScanResults() {
             style={{
               background: 'none',
               border: 'none',
-              padding: '8px 4px',
+              padding: 'var(--ss-space-sm) var(--ss-space-xs)',
               cursor: 'pointer',
               fontWeight: tab === t ? 600 : 400,
-              borderBottom: tab === t ? '2px solid #2563eb' : '2px solid transparent',
+              borderBottom: tab === t ? '2px solid var(--ss-accent-primary)' : '2px solid transparent',
               marginBottom: -1,
               textTransform: 'capitalize',
             }}
@@ -212,7 +245,7 @@ function FactsTab({ scanId }: { scanId: string }) {
 
   if (items.length === 0) {
     return (
-      <div className="detail-card" style={{ marginTop: 12 }}>
+      <div className="detail-card" style={{ marginTop: 'var(--ss-space-md)' }}>
         <p className="muted">
           No facts collected — this scan used the legacy bundle runner.
         </p>
@@ -232,26 +265,27 @@ function FactsTab({ scanId }: { scanId: string }) {
 function CollectorFactsSection({ entry }: { entry: CollectedFactsEntry }) {
   const [collapsed, setCollapsed] = useState(false);
   return (
-    <div className="detail-card" style={{ marginBottom: 16 }}>
+    <div className="detail-card" style={{ marginBottom: 'var(--ss-space-lg)' }}>
       <div
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
         onClick={() => setCollapsed(!collapsed)}
       >
         <div>
           <strong style={{ fontFamily: 'monospace', fontSize: 14 }}>{entry.collector_id}</strong>
-          <span className="muted" style={{ marginLeft: 12, fontSize: 12 }}>
+          <span className="muted" style={{ marginLeft: 'var(--ss-space-md)', fontSize: 12 }}>
             {new Date(entry.collected_at).toLocaleString()}
           </span>
         </div>
-        <span style={{ fontWeight: 600, fontSize: 16 }}>{collapsed ? '+' : '\u2212'}</span>
+        <span style={{ fontWeight: 600, fontSize: 16 }}>{collapsed ? '+' : '−'}</span>
       </div>
       {!collapsed && (
         <pre style={{
+          // Dark code block — no dark-surface token exists, kept literal.
           background: '#1e293b',
           color: '#e2e8f0',
-          padding: 16,
-          borderRadius: 6,
-          marginTop: 12,
+          padding: 'var(--ss-space-lg)',
+          borderRadius: 'var(--ss-radius-md)',
+          marginTop: 'var(--ss-space-md)',
           marginBottom: 0,
           overflow: 'auto',
           maxHeight: 500,
@@ -286,7 +320,7 @@ function ReEvaluateButton({ scanId }: { scanId: string }) {
   });
 
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
       <button
         className="btn btn-secondary"
         disabled={mutation.isPending}
@@ -299,8 +333,10 @@ function ReEvaluateButton({ scanId }: { scanId: string }) {
         <span
           style={{
             padding: '4px 10px',
-            borderRadius: 4,
+            borderRadius: 'var(--ss-radius-sm)',
             fontSize: 13,
+            // Success/danger toast tints — no success-bg/danger-bg/-text token
+            // exists, so these stay literal (same call as Credentials).
             background: mutation.isError ? '#fef2f2' : '#f0fdf4',
             color: mutation.isError ? '#991b1b' : '#166534',
           }}
@@ -313,6 +349,35 @@ function ReEvaluateButton({ scanId }: { scanId: string }) {
 }
 
 function ScanOverview({ scan }: { scan: Scan }) {
+  const [activeResultId, setActiveResultId] = useState<string | null>(null);
+
+  const columns: ColumnDef<ScanResult>[] = [
+    { id: 'control_id', header: 'Control ID', accessorFn: (r) => r.control_id },
+    { id: 'title', header: 'Title', accessorFn: (r) => r.title },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (r) => r.status,
+      cell: ({ row }) => <ControlStatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (r) => r.severity ?? '',
+      cell: ({ row }) => row.original.severity || '-',
+    },
+    {
+      id: 'indicator',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="expand-indicator">{activeResultId === row.original.id ? '-' : '+'}</span>
+      ),
+    },
+  ];
+
+  const activeResult = scan.results?.find((r) => r.id === activeResultId) ?? null;
+
   return (
     <div>
 
@@ -342,9 +407,9 @@ function ScanOverview({ scan }: { scan: Scan }) {
       </div>
 
       {scan.status === 'failed' && scan.error_message && (
-        <div className="detail-card" style={{ borderColor: '#b91c1c', marginTop: 12 }}>
+        <div className="detail-card" style={{ borderColor: 'var(--ss-danger)', marginTop: 'var(--ss-space-md)' }}>
           <strong>Failure reason:</strong>
-          <pre style={{ whiteSpace: 'pre-wrap', marginTop: 6, marginBottom: 0 }}>
+          <pre style={{ whiteSpace: 'pre-wrap', marginTop: 'var(--ss-space-xs)', marginBottom: 0 }}>
             {scan.error_message}
           </pre>
         </div>
@@ -353,28 +418,22 @@ function ScanOverview({ scan }: { scan: Scan }) {
       <SummaryBar scan={scan} />
 
       {(scan.status === 'completed' || scan.status === 'failed') && (
-        <div style={{ margin: '12px 0' }}>
+        <div style={{ margin: 'var(--ss-space-md) 0' }}>
           <ReEvaluateButton scanId={scan.id} />
         </div>
       )}
 
       {scan.results && scan.results.length > 0 ? (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Control ID</th>
-              <th>Title</th>
-              <th>Status</th>
-              <th>Severity</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {scan.results.map((r) => (
-              <ResultRow key={r.id} result={r} />
-            ))}
-          </tbody>
-        </table>
+        <>
+          <DataTable
+            columns={columns}
+            data={scan.results}
+            getRowId={(r) => r.id}
+            onRowClick={(r) => setActiveResultId((cur) => (cur === r.id ? null : r.id))}
+            initialSorting={[{ id: 'control_id', desc: false }]}
+          />
+          {activeResult && <ResultDetail result={activeResult} />}
+        </>
       ) : (
         <p>
           {scan.status === 'queued'
