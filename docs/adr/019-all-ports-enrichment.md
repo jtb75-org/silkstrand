@@ -1,6 +1,6 @@
 # ADR 019: All-ports enrichment — service detection + network vulns (supersedes ADR 009)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-14
 **Supersedes:** [ADR 009](./009-service-detection.md) (service detection via
 nuclei-network — ratified and extended here).
