@@ -45,6 +45,19 @@ func (h *ScanHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, scans)
 }
 
+// scanDetailResponse is the GET /api/v1/scans/{id} shape (#387): all existing
+// Scan fields (promoted from the embedded *Scan) plus the chunk rollup + list
+// that seed the live Activity drawer. The rollup is computed by
+// model.ScanRollup — the SAME function the scan_progress stream uses — so the
+// drawer opens on one shape and live events patch the identical one.
+type scanDetailResponse struct {
+	*model.Scan
+	ChunksTotal     int               `json:"chunks_total"`
+	ChunksCompleted int               `json:"chunks_completed"`
+	ChunksFailed    int               `json:"chunks_failed"`
+	Chunks          []model.ScanChunk `json:"chunks"`
+}
+
 func (h *ScanHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	scan, err := h.store.GetScan(r.Context(), id)
@@ -57,7 +70,36 @@ func (h *ScanHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "scan not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, scan)
+	chunks, err := h.store.ListScanChunks(r.Context(), id)
+	if err != nil {
+		// This endpoint is the drawer's authoritative initial state; failing to
+		// load the chunks must NOT fall through to the implicit single-chunk
+		// rollup and hand the UI a different contract shape for a real chunked
+		// scan (#387). Fail loudly instead.
+		slog.Error("listing scan chunks", "error", err, "scan_id", id)
+		writeError(w, http.StatusInternalServerError, "failed to load scan detail")
+		return
+	}
+	if chunks == nil {
+		chunks = []model.ScanChunk{}
+	}
+	var completed, failed int
+	for _, c := range chunks {
+		switch c.Status {
+		case model.ScanChunkStatusCompleted:
+			completed++
+		case model.ScanChunkStatusFailed:
+			failed++
+		}
+	}
+	total, comp, fail := model.ScanRollup(scan.ScanType, scan.Status, len(chunks), completed, failed)
+	writeJSON(w, http.StatusOK, scanDetailResponse{
+		Scan:            scan,
+		ChunksTotal:     total,
+		ChunksCompleted: comp,
+		ChunksFailed:    fail,
+		Chunks:          chunks,
+	})
 }
 
 func (h *ScanHandler) Create(w http.ResponseWriter, r *http.Request) {

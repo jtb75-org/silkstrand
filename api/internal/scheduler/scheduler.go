@@ -489,12 +489,14 @@ func (d Dispatcher) DispatchNextChunk(ctx context.Context, agentID, scanID strin
 				return false, fmt.Errorf("completing chunked scan: %w", err)
 			}
 			d.publishScanStatus(ctx, scanID)
+			d.publishScanProgress(ctx, scan, summary, model.ScanProgressScanCompleted, model.ScanStatusCompleted)
 			d.DrainAgentQueue(ctx, agentID)
 		} else if summary.Failed > 0 && summary.Pending == 0 && summary.Running == 0 {
 			if err := d.Store.FailScan(ctx, scanID, "one or more discovery chunks failed"); err != nil {
 				return false, fmt.Errorf("failing chunked scan: %w", err)
 			}
 			d.publishScanStatus(ctx, scanID)
+			d.publishScanProgress(ctx, scan, summary, model.ScanProgressScanFailed, model.ScanStatusFailed)
 			d.DrainAgentQueue(ctx, agentID)
 		}
 		return false, nil
@@ -603,4 +605,27 @@ func (d Dispatcher) publishScanStatus(ctx context.Context, scanID string) {
 	}); err != nil {
 		slog.Warn("scan_status publish failed", "scan_id", scan.ID, "error", err)
 	}
+}
+
+// publishScanProgress emits the parent-terminal scan_progress event (#387) at
+// the point a chunked discovery scan actually transitions — here in
+// DispatchNextChunk, so exactly one terminal fires (the WSS handler emits the
+// per-chunk chunk_completed/chunk_failed, never the parent terminal).
+func (d Dispatcher) publishScanProgress(ctx context.Context, scan *model.Scan, summary *store.ScanChunkSummary, event, status string) {
+	if d.Bus == nil || scan == nil {
+		return
+	}
+	var total, completed, failed int
+	if summary != nil {
+		total, completed, failed = summary.Total, summary.Completed, summary.Failed
+	}
+	t, c, f := model.ScanRollup(scan.ScanType, status, total, completed, failed)
+	events.PublishScanProgress(ctx, d.Bus, scan.TenantID, model.ScanProgress{
+		ScanID:          scan.ID,
+		Event:           event,
+		Status:          status,
+		ChunksTotal:     t,
+		ChunksCompleted: c,
+		ChunksFailed:    f,
+	})
 }

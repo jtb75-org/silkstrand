@@ -412,26 +412,108 @@ const (
 // runs the full recon pipeline against TargetIdentifier, then commits at the
 // chunk boundary so reconnects can resume from the first incomplete chunk.
 type ScanChunk struct {
-	ID               string     `json:"id"`
-	ScanID           string     `json:"scan_id"`
-	TenantID         string     `json:"tenant_id"`
-	AgentID          *string    `json:"agent_id,omitempty"`
-	ChunkIndex       int        `json:"chunk_index"`
-	TargetType       string     `json:"target_type"`
-	TargetIdentifier string     `json:"target_identifier"`
-	IPStart          *string    `json:"ip_start,omitempty"`
-	IPEnd            *string    `json:"ip_end,omitempty"`
-	IPCount          int        `json:"ip_count"`
-	Status           string     `json:"status"`
-	Attempts         int        `json:"attempts"`
-	AssetsFound      int        `json:"assets_found"`
-	HostsScanned     int        `json:"hosts_scanned"`
-	ErrorMessage     *string    `json:"error_message,omitempty"`
-	DispatchedAt     *time.Time `json:"dispatched_at,omitempty"`
-	StartedAt        *time.Time `json:"started_at,omitempty"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               string  `json:"id"`
+	ScanID           string  `json:"scan_id"`
+	TenantID         string  `json:"tenant_id"`
+	AgentID          *string `json:"agent_id,omitempty"`
+	ChunkIndex       int     `json:"chunk_index"`
+	TargetType       string  `json:"target_type"`
+	TargetIdentifier string  `json:"target_identifier"`
+	IPStart          *string `json:"ip_start,omitempty"`
+	IPEnd            *string `json:"ip_end,omitempty"`
+	IPCount          int     `json:"ip_count"`
+	Status           string  `json:"status"`
+	Attempts         int     `json:"attempts"`
+	AssetsFound      int     `json:"assets_found"`
+	HostsScanned     int     `json:"hosts_scanned"`
+	// CurrentStage is the last recon stage the chunk reported
+	// (naabu|httpx|nuclei). Best-effort/live — nil until the first batch
+	// arrives, and means "last reported stage", not "stage executing now"
+	// (a zero-finding stage emits no batch). See ADR 012 / #387.
+	CurrentStage *string    `json:"current_stage,omitempty"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	DispatchedAt *time.Time `json:"dispatched_at,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ScanProgress is the payload of the "scan_progress" SSE event (#387) that
+// powers the live Scan Activity detail drawer. One event Kind covers every
+// scan type via the Event discriminator; the rollup (ChunksTotal/Completed/
+// Failed) is computed by ScanRollup so the streamed shape matches the REST
+// snapshot byte-for-byte. ScanID is top-level because the bus filters
+// per-scan by reading payload.scan_id.
+type ScanProgress struct {
+	ScanID          string `json:"scan_id"`
+	Event           string `json:"event"`
+	Status          string `json:"status"`
+	ChunksTotal     int    `json:"chunks_total"`
+	ChunksCompleted int    `json:"chunks_completed"`
+	ChunksFailed    int    `json:"chunks_failed"`
+	// Chunk is the single chunk this event is about; nil for scan-level
+	// events (scan_started/scan_completed/scan_failed) and for compliance.
+	Chunk *ScanProgressChunk `json:"chunk,omitempty"`
+}
+
+// ScanProgressChunk is the per-chunk delta carried by chunk-scoped events.
+// The UI keys on ChunkID (stable); ChunkIndex/TargetIdentifier are present in
+// the REST snapshot for every real chunk, so live events carry only what the
+// source message already has (ChunkIndex is a pointer — the agent's
+// scan_started/scan_error messages don't include it).
+type ScanProgressChunk struct {
+	ChunkID          string `json:"chunk_id,omitempty"`
+	ChunkIndex       *int   `json:"chunk_index,omitempty"`
+	TargetIdentifier string `json:"target_identifier,omitempty"`
+	Status           string `json:"status,omitempty"`
+	CurrentStage     string `json:"current_stage,omitempty"`
+	// HostsScanned/AssetsFound are pointers so chunk_completed can report an
+	// authoritative zero distinctly from "this event carries no count" (every
+	// other chunk event leaves them nil). Counts are authoritative only on
+	// chunk_completed (#387).
+	HostsScanned *int   `json:"hosts_scanned,omitempty"`
+	AssetsFound  *int   `json:"assets_found,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+// Scan progress event discriminators (#387). scan_started marks the running
+// transition for non-chunked scans; chunked scans signal running via
+// chunk_started instead.
+const (
+	ScanProgressScanStarted    = "scan_started"
+	ScanProgressChunkStarted   = "chunk_started"
+	ScanProgressStageProgress  = "stage_progress"
+	ScanProgressChunkCompleted = "chunk_completed"
+	ScanProgressChunkFailed    = "chunk_failed"
+	ScanProgressScanCompleted  = "scan_completed"
+	ScanProgressScanFailed     = "scan_failed"
+)
+
+// ScanRollup normalizes the chunk rollup shown by the drawer. It is the single
+// source of truth used by BOTH the REST snapshot and the streamed events, so
+// they never disagree (#387):
+//   - chunked scans (chunkTotal>0): report the real chunk counts.
+//   - non-chunked DISCOVERY: a single implicit work unit (total=1), completed
+//     or failed once the scan reaches a terminal status. Stages are meaningful
+//     here, so the UI shows one synthetic chunk.
+//   - compliance / anything else: no chunk model (total=0); terminal state is
+//     conveyed by the event/status alone, never a fake chunk.
+func ScanRollup(scanType, status string, chunkTotal, chunkCompleted, chunkFailed int) (total, completed, failed int) {
+	if chunkTotal > 0 {
+		return chunkTotal, chunkCompleted, chunkFailed
+	}
+	if scanType == ScanTypeDiscovery {
+		total = 1
+		switch status {
+		case ScanStatusCompleted:
+			completed = 1
+		case ScanStatusFailed:
+			failed = 1
+		}
+		return total, completed, failed
+	}
+	return 0, 0, 0
 }
 
 type CreateScanRequest struct {
