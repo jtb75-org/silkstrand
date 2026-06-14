@@ -10,10 +10,18 @@ import {
 } from '../api/client';
 import type { Bundle, BundleControl, ControlEntry } from '../api/types';
 import type { ComplianceProfile, TenantPolicy } from '../api/client';
+import type { ColumnDef } from '@tanstack/react-table';
+import { ShieldCheck, Package } from 'lucide-react';
 import ControlDetailDrawer from '../components/ControlDetailDrawer';
 import FrameworkChip from '../components/FrameworkChip';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 type Tab = 'frameworks' | 'controls' | 'profiles';
+
+// The global discovery bundle (fixed UUID) isn't a CIS framework and stays
+// hidden from the frameworks/profile surfaces.
+const DISCOVERY_BUNDLE_ID = '11111111-1111-1111-1111-111111111111';
 
 export default function Compliance() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -29,15 +37,18 @@ export default function Compliance() {
 
   return (
     <div>
-      <h1>Compliance</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+        <ShieldCheck size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+        <h1 style={{ margin: 0 }}>Compliance</h1>
+      </div>
 
-      <div className="tab-bar" style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e5e7eb', marginTop: 16 }}>
+      <div className="tab-bar" style={{ display: 'flex', gap: 'var(--ss-space-xs)', borderBottom: '1px solid var(--ss-border-default)', marginTop: 'var(--ss-space-lg)' }}>
         <TabButton active={tab === 'frameworks'} onClick={() => setTab('frameworks')}>Frameworks</TabButton>
         <TabButton active={tab === 'controls'} onClick={() => setTab('controls')}>Controls</TabButton>
         <TabButton active={tab === 'profiles'} onClick={() => setTab('profiles')}>Profiles</TabButton>
       </div>
 
-      <div style={{ marginTop: 24 }}>
+      <div style={{ marginTop: 'var(--ss-space-xl)' }}>
         {tab === 'frameworks' && <FrameworksTab />}
         {tab === 'controls' && <ControlsTab />}
         {tab === 'profiles' && <ProfilesTab />}
@@ -51,9 +62,9 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
     <button
       onClick={onClick}
       style={{
-        padding: '8px 16px',
+        padding: 'var(--ss-space-sm) var(--ss-space-lg)',
         border: 'none',
-        borderBottom: active ? '2px solid #0f766e' : '2px solid transparent',
+        borderBottom: active ? '2px solid var(--ss-accent-primary)' : '2px solid transparent',
         background: 'none',
         fontWeight: active ? 600 : 400,
         cursor: 'pointer',
@@ -75,9 +86,68 @@ function FrameworksTab() {
     queryFn: listBundles,
   });
 
+  const rows = (bundles ?? []).filter((b) => b.id !== DISCOVERY_BUNDLE_ID);
+
+  // Action-only: the one per-row action toggles an inline controls panel that
+  // renders below the table (DataTable has no row-expand API) \u2014 same family as
+  // the Bundles page ControlsPanel substitute.
+  const columns: ColumnDef<Bundle>[] = [
+    { id: 'name', header: 'Name', accessorFn: (b) => b.name },
+    { id: 'version', header: 'Version', accessorFn: (b) => b.version },
+    {
+      id: 'engine',
+      header: 'Engine',
+      accessorFn: (b) => b.engine ?? b.target_type ?? '\u2014',
+      cell: ({ row }) => (
+        <span className="badge badge-type">{row.original.engine ?? row.original.target_type ?? '\u2014'}</span>
+      ),
+    },
+    {
+      id: 'controls',
+      header: 'Controls',
+      accessorFn: (b) => b.control_count ?? 0,
+      cell: ({ row }) => {
+        const n = row.original.control_count ?? 0;
+        return n > 0 ? `${n} controls` : '\u2014';
+      },
+    },
+    {
+      id: 'hash',
+      header: 'Hash',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const hash = row.original.tarball_hash;
+        return hash ? (
+          <span title={hash} style={{ fontFamily: 'monospace', fontSize: 12, cursor: 'help' }}>
+            {hash.substring(0, 12) + '\u2026'}
+          </span>
+        ) : (
+          <span className="muted">{'\u2014'}</span>
+        );
+      },
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const isOpen = expandedId === row.original.id;
+        return (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="btn btn-sm" onClick={() => setExpandedId(isOpen ? null : row.original.id)}>
+              {isOpen ? 'Hide controls' : 'View controls'}
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
+
+  const expandedBundle = expandedId ? rows.find((b) => b.id === expandedId) ?? null : null;
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--ss-space-lg)' }}>
         <h2 style={{ margin: 0 }}>Frameworks</h2>
         <button
           className="btn btn-primary"
@@ -100,87 +170,25 @@ function FrameworksTab() {
 
       {isLoading && <p>Loading...</p>}
       {error && <p className="error">Failed to load bundles: {(error as Error).message}</p>}
-      {!isLoading && bundles && bundles.length === 0 && (
-        <p className="muted">No bundles registered. Upload a bundle to get started.</p>
+      {!isLoading && !error && rows.length === 0 && (
+        <EmptyState icon={<Package />} title="No bundles registered. Upload a bundle to get started." />
       )}
 
-      {bundles && bundles.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Version</th>
-              <th>Engine</th>
-              <th>Controls</th>
-              <th>Hash</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {bundles
-              .filter((b) => b.id !== '11111111-1111-1111-1111-111111111111')
-              .map((b) => (
-              <BundleRow
-                key={b.id}
-                bundle={b}
-                expanded={expandedId === b.id}
-                onToggle={() => setExpandedId(expandedId === b.id ? null : b.id)}
-              />
-            ))}
-          </tbody>
-        </table>
+      {rows.length > 0 && (
+        <DataTable
+          columns={columns}
+          data={rows}
+          getRowId={(b) => b.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
+      )}
+
+      {expandedBundle && (
+        <div style={{ marginTop: 'var(--ss-space-md)' }}>
+          <ControlsPanel bundleId={expandedBundle.id} />
+        </div>
       )}
     </div>
-  );
-}
-
-function BundleRow({
-  bundle,
-  expanded,
-  onToggle,
-}: {
-  bundle: Bundle;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const engine = bundle.engine ?? bundle.target_type ?? '\u2014';
-  const controlCount = bundle.control_count ?? 0;
-  const hash = bundle.tarball_hash;
-  const truncatedHash = hash ? hash.substring(0, 12) + '\u2026' : '\u2014';
-
-  return (
-    <>
-      <tr>
-        <td>{bundle.name}</td>
-        <td>{bundle.version}</td>
-        <td><span className="badge badge-type">{engine}</span></td>
-        <td>{controlCount > 0 ? `${controlCount} controls` : '\u2014'}</td>
-        <td>
-          {hash ? (
-            <span
-              title={hash}
-              style={{ fontFamily: 'monospace', fontSize: 12, cursor: 'help' }}
-            >
-              {truncatedHash}
-            </span>
-          ) : (
-            <span className="muted">{'\u2014'}</span>
-          )}
-        </td>
-        <td style={{ textAlign: 'right' }}>
-          <button className="btn btn-sm" onClick={onToggle}>
-            {expanded ? 'Hide controls' : 'View controls'}
-          </button>
-        </td>
-      </tr>
-      {expanded && (
-        <tr>
-          <td colSpan={6} style={{ padding: 0 }}>
-            <ControlsPanel bundleId={bundle.id} />
-          </td>
-        </tr>
-      )}
-    </>
   );
 }
 
@@ -190,47 +198,54 @@ function ControlsPanel({ bundleId }: { bundleId: string }) {
     queryFn: () => getBundleControls(bundleId),
   });
 
-  if (isLoading) return <div style={{ padding: 16 }}>Loading controls...</div>;
-  if (error) return <div style={{ padding: 16 }} className="error">Failed to load controls: {(error as Error).message}</div>;
-  if (!controls || controls.length === 0) return <div style={{ padding: 16 }} className="muted">No controls registered for this bundle.</div>;
+  const columns: ColumnDef<BundleControl>[] = [
+    {
+      id: 'control_id',
+      header: 'Control ID',
+      accessorFn: (c) => c.control_id,
+      cell: ({ row }) => <span style={{ fontFamily: 'monospace', fontSize: 13 }}>{row.original.control_id}</span>,
+    },
+    { id: 'name', header: 'Name', accessorFn: (c) => c.name },
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (c) => c.severity ?? '',
+      cell: ({ row }) =>
+        row.original.severity ? <SeverityBadge severity={row.original.severity} /> : <span className="muted">{'\u2014'}</span>,
+    },
+    { id: 'section', header: 'Section', accessorFn: (c) => c.section ?? '\u2014' },
+    { id: 'engine', header: 'Engine', accessorFn: (c) => c.engine },
+    {
+      id: 'versions',
+      header: 'Versions',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const versions = Array.isArray(row.original.engine_versions) ? row.original.engine_versions : [];
+        return versions.length > 0 ? versions.join(', ') : '\u2014';
+      },
+    },
+    {
+      id: 'tags',
+      header: 'Tags',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const tags = Array.isArray(row.original.tags) ? row.original.tags : [];
+        return tags.length > 0 ? tags.join(', ') : '\u2014';
+      },
+    },
+  ];
+
+  if (isLoading) return <div style={{ padding: 'var(--ss-space-lg)' }}>Loading controls...</div>;
+  if (error) return <div style={{ padding: 'var(--ss-space-lg)' }} className="error">Failed to load controls: {(error as Error).message}</div>;
+  if (!controls || controls.length === 0) return <div style={{ padding: 'var(--ss-space-lg)' }} className="muted">No controls registered for this bundle.</div>;
 
   return (
-    <div style={{ padding: '8px 16px 16px' }}>
-      <table className="table" style={{ marginBottom: 0 }}>
-        <thead>
-          <tr>
-            <th>Control ID</th>
-            <th>Name</th>
-            <th>Severity</th>
-            <th>Section</th>
-            <th>Engine</th>
-            <th>Versions</th>
-            <th>Tags</th>
-          </tr>
-        </thead>
-        <tbody>
-          {controls.map((c) => {
-            const versions = Array.isArray(c.engine_versions) ? c.engine_versions : [];
-            const tags = Array.isArray(c.tags) ? c.tags : [];
-            return (
-              <tr key={c.control_id}>
-                <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{c.control_id}</td>
-                <td>{c.name}</td>
-                <td>
-                  {c.severity
-                    ? <SeverityBadge severity={c.severity} />
-                    : <span className="muted">{'\u2014'}</span>}
-                </td>
-                <td>{c.section ?? '\u2014'}</td>
-                <td>{c.engine}</td>
-                <td>{versions.length > 0 ? versions.join(', ') : '\u2014'}</td>
-                <td>{tags.length > 0 ? tags.join(', ') : '\u2014'}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      columns={columns}
+      data={controls}
+      getRowId={(c) => c.control_id}
+      initialSorting={[{ id: 'control_id', desc: false }]}
+    />
   );
 }
 
@@ -252,6 +267,8 @@ function PolicyProvenanceBadge({
 }) {
   const policy = policyMap.get(controlId);
   if (!policy) return null; // builtin — no badge needed
+  // Provenance tints (blue = custom, purple = customized) have no design-system
+  // token equivalents, so they stay literal.
   if (policy.origin === 'custom') {
     return (
       <span
@@ -306,7 +323,7 @@ function UploadModal({
   }
 
   return (
-    <div className="form-card" style={{ maxWidth: 520, marginBottom: 24 }}>
+    <div className="form-card" style={{ maxWidth: 520, marginBottom: 'var(--ss-space-xl)' }}>
       <h3 style={{ marginTop: 0 }}>Upload bundle</h3>
       <form onSubmit={handleSubmit}>
         <div className="form-group">
@@ -329,7 +346,7 @@ function UploadModal({
           />
         </div>
         {errorMsg && <p className="error">{errorMsg}</p>}
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', marginTop: 'var(--ss-space-md)' }}>
           <button
             type="submit"
             className="btn btn-primary"
@@ -418,7 +435,7 @@ function ControlsTab() {
     if (!bundles) return [];
     const names = new Set<string>();
     for (const b of bundles) {
-      if (b.id !== '11111111-1111-1111-1111-111111111111' && b.framework) {
+      if (b.id !== DISCOVERY_BUNDLE_ID && b.framework) {
         names.add(b.framework);
       }
     }
@@ -440,15 +457,75 @@ function ControlsTab() {
 
   const controls = data?.items ?? [];
 
+  // Row-click opens the ControlDetailDrawer (the page's existing detail surface);
+  // policy/frameworks/tags are composed/badge columns and stay non-sortable.
+  const columns: ColumnDef<ControlEntry>[] = [
+    {
+      id: 'control_id',
+      header: 'Control ID',
+      accessorFn: (c) => c.control_id,
+      cell: ({ row }) => <span style={{ fontFamily: 'monospace', fontSize: 13 }}>{row.original.control_id}</span>,
+    },
+    { id: 'name', header: 'Name', accessorFn: (c) => c.name },
+    {
+      id: 'policy',
+      header: 'Policy',
+      enableSorting: false,
+      cell: ({ row }) => <PolicyProvenanceBadge controlId={row.original.control_id} policyMap={policyMap} />,
+    },
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (c) => c.severity ?? '',
+      cell: ({ row }) =>
+        row.original.severity ? <SeverityBadge severity={row.original.severity} /> : <span className="muted">{'—'}</span>,
+    },
+    {
+      id: 'engine',
+      header: 'Engine',
+      accessorFn: (c) => c.engine,
+      cell: ({ row }) => {
+        const versions = Array.isArray(row.original.engine_versions) ? row.original.engine_versions : [];
+        return <span title={versions.length > 0 ? `Versions: ${versions.join(', ')}` : ''}>{row.original.engine}</span>;
+      },
+    },
+    {
+      id: 'frameworks',
+      header: 'Frameworks',
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.frameworks.map((fw) => (
+          <FrameworkChip key={`${fw.bundle_id}-${fw.section}`} bundleName={fw.bundle_name} section={fw.section} />
+        )),
+    },
+    {
+      id: 'tags',
+      header: 'Tags',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const tags = Array.isArray(row.original.tags) ? row.original.tags : [];
+        return tags.length > 0 ? (
+          tags.map((t) => (
+            <span key={t} className="badge" style={{ fontSize: 11, padding: '1px 6px', marginRight: 'var(--ss-space-xs)', opacity: 0.7 }}>
+              {t}
+            </span>
+          ))
+        ) : (
+          <span className="muted">{'—'}</span>
+        );
+      },
+    },
+  ];
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--ss-space-lg)' }}>
         <h2 style={{ margin: 0 }}>Controls</h2>
         {data && <span className="muted">{data.total} control{data.total !== 1 ? 's' : ''}</span>}
       </div>
 
       {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', flexWrap: 'wrap', marginBottom: 'var(--ss-space-lg)' }}>
         <select
           value={framework}
           onChange={(e) => setFilter('framework', e.target.value)}
@@ -506,70 +583,13 @@ function ControlsTab() {
       )}
 
       {controls.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Control ID</th>
-              <th>Name</th>
-              <th>Policy</th>
-              <th>Severity</th>
-              <th>Engine</th>
-              <th>Frameworks</th>
-              <th>Tags</th>
-            </tr>
-          </thead>
-          <tbody>
-            {controls.map((c) => {
-              const versions = Array.isArray(c.engine_versions) ? c.engine_versions : [];
-              const tags = Array.isArray(c.tags) ? c.tags : [];
-              return (
-                <tr
-                  key={c.control_id}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setSelectedControl(c)}
-                >
-                  <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{c.control_id}</td>
-                  <td>{c.name}</td>
-                  <td>
-                    <PolicyProvenanceBadge controlId={c.control_id} policyMap={policyMap} />
-                  </td>
-                  <td>
-                    {c.severity
-                      ? <SeverityBadge severity={c.severity} />
-                      : <span className="muted">{'\u2014'}</span>}
-                  </td>
-                  <td>
-                    <span title={versions.length > 0 ? `Versions: ${versions.join(', ')}` : ''}>
-                      {c.engine}
-                    </span>
-                  </td>
-                  <td>
-                    {c.frameworks.map((fw) => (
-                      <FrameworkChip
-                        key={`${fw.bundle_id}-${fw.section}`}
-                        bundleName={fw.bundle_name}
-                        section={fw.section}
-                      />
-                    ))}
-                  </td>
-                  <td>
-                    {tags.length > 0
-                      ? tags.map((t) => (
-                          <span
-                            key={t}
-                            className="badge"
-                            style={{ fontSize: 11, padding: '1px 6px', marginRight: 4, opacity: 0.7 }}
-                          >
-                            {t}
-                          </span>
-                        ))
-                      : <span className="muted">{'\u2014'}</span>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={controls}
+          getRowId={(c) => c.control_id}
+          onRowClick={(c) => setSelectedControl(c)}
+          initialSorting={[{ id: 'control_id', desc: false }]}
+        />
       )}
 
       {selectedControl && (
@@ -640,9 +660,37 @@ function ProfilesTab() {
     );
   }
 
+  const columns: ColumnDef<ComplianceProfile>[] = [
+    { id: 'name', header: 'Name', accessorFn: (p) => p.name },
+    { id: 'based_on', header: 'Based on', accessorFn: (p) => p.base_framework || 'Custom' },
+    { id: 'controls', header: 'Controls', accessorFn: (p) => p.control_count },
+    { id: 'version', header: 'Version', accessorFn: (p) => p.version },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (p) => p.status,
+      cell: ({ row }) => <ProfileStatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const p = row.original;
+        return (
+          <div style={{ display: 'flex', gap: 'var(--ss-space-xs)', justifyContent: 'flex-end' }}>
+            <button className="btn btn-sm" onClick={() => setEditingProfileId(p.id)}>Edit</button>
+            <button className="btn btn-sm" onClick={() => setPublishConfirm(p)}>Publish</button>
+            <button className="btn btn-sm" style={{ color: 'var(--ss-danger)' }} onClick={() => setDeleteConfirm(p)}>Delete</button>
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--ss-space-lg)' }}>
         <h2 style={{ margin: 0 }}>Profiles</h2>
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
           + New profile
@@ -668,51 +716,12 @@ function ProfilesTab() {
       )}
 
       {profiles && profiles.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Based on</th>
-              <th>Controls</th>
-              <th>Version</th>
-              <th>Status</th>
-              <th style={{ textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {profiles.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td>{p.base_framework || 'Custom'}</td>
-                <td>{p.control_count}</td>
-                <td>{p.version}</td>
-                <td>
-                  <ProfileStatusBadge status={p.status} />
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                    <button className="btn btn-sm" onClick={() => setEditingProfileId(p.id)}>
-                      Edit
-                    </button>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setPublishConfirm(p)}
-                    >
-                      Publish
-                    </button>
-                    <button
-                      className="btn btn-sm"
-                      style={{ color: '#ef4444' }}
-                      onClick={() => setDeleteConfirm(p)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={profiles}
+          getRowId={(p) => p.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
       )}
 
       {/* Publish confirmation modal */}
@@ -724,7 +733,7 @@ function ProfilesTab() {
               Publish <strong>{publishConfirm.name}</strong> v{publishConfirm.version + 1}?
               This will build and sign a bundle from the selected controls.
             </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', justifyContent: 'flex-end', marginTop: 'var(--ss-space-lg)' }}>
               <button className="btn" onClick={() => setPublishConfirm(null)} disabled={publishMut.isPending}>
                 Cancel
               </button>
@@ -748,13 +757,13 @@ function ProfilesTab() {
             <p>
               Delete <strong>{deleteConfirm.name}</strong>? This cannot be undone.
             </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', justifyContent: 'flex-end', marginTop: 'var(--ss-space-lg)' }}>
               <button className="btn" onClick={() => setDeleteConfirm(null)} disabled={deleteMut.isPending}>
                 Cancel
               </button>
               <button
                 className="btn"
-                style={{ background: '#ef4444', color: '#fff', border: 'none' }}
+                style={{ background: 'var(--ss-danger)', color: 'var(--ss-text-on-accent)', border: 'none' }}
                 disabled={deleteMut.isPending}
                 onClick={() => deleteMut.mutate(deleteConfirm.id)}
               >
@@ -801,7 +810,7 @@ function CreateProfileModal({
     if (!bundles) return [];
     const names = new Set<string>();
     for (const b of bundles) {
-      if (b.id !== '11111111-1111-1111-1111-111111111111' && b.framework) {
+      if (b.id !== DISCOVERY_BUNDLE_ID && b.framework) {
         names.add(b.framework);
       }
     }
@@ -847,7 +856,7 @@ function CreateProfileModal({
         <h3 style={{ marginTop: 0 }}>New profile</h3>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="profile-name">Name <span style={{ color: '#ef4444' }}>*</span></label>
+            <label htmlFor="profile-name">Name <span style={{ color: 'var(--ss-danger)' }}>*</span></label>
             <input
               id="profile-name"
               type="text"
@@ -884,7 +893,7 @@ function CreateProfileModal({
             </small>
           </div>
           {error && <p className="error">{error}</p>}
-          <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', marginTop: 'var(--ss-space-lg)', justifyContent: 'flex-end' }}>
             <button type="button" className="btn" onClick={onCancel} disabled={creating}>
               Cancel
             </button>
@@ -944,7 +953,7 @@ function ControlPicker({
     if (!bundles) return [];
     const names = new Set<string>();
     for (const b of bundles) {
-      if (b.id !== '11111111-1111-1111-1111-111111111111' && b.framework) {
+      if (b.id !== DISCOVERY_BUNDLE_ID && b.framework) {
         names.add(b.framework);
       }
     }
@@ -976,19 +985,60 @@ function ControlPicker({
     });
   }, []);
 
-  const toggleAll = useCallback(() => {
-    const allVisible = controls.map((c) => c.control_id);
+  // Select-all over the currently rendered rows; DataTable passes the visible
+  // ids + the target checked state (replaces the manual toggleAll header).
+  const toggleAll = useCallback((ids: string[], checked: boolean) => {
     setSelectedIds((prev) => {
-      const allSelected = allVisible.every((id) => prev.has(id));
       const next = new Set(prev);
-      if (allSelected) {
-        allVisible.forEach((id) => next.delete(id));
-      } else {
-        allVisible.forEach((id) => next.add(id));
-      }
+      if (checked) ids.forEach((id) => next.add(id));
+      else ids.forEach((id) => next.delete(id));
       return next;
     });
-  }, [controls]);
+  }, []);
+
+  const columns: ColumnDef<ControlEntry>[] = [
+    {
+      id: 'control_id',
+      header: 'Control ID',
+      accessorFn: (c) => c.control_id,
+      cell: ({ row }) => <span style={{ fontFamily: 'monospace', fontSize: 13 }}>{row.original.control_id}</span>,
+    },
+    { id: 'name', header: 'Name', accessorFn: (c) => c.name },
+    {
+      id: 'severity',
+      header: 'Severity',
+      accessorFn: (c) => c.severity ?? '',
+      cell: ({ row }) =>
+        row.original.severity ? <SeverityBadge severity={row.original.severity} /> : <span className="muted">{'—'}</span>,
+    },
+    { id: 'engine', header: 'Engine', accessorFn: (c) => c.engine },
+    {
+      id: 'frameworks',
+      header: 'Frameworks',
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.frameworks.map((fw) => (
+          <FrameworkChip key={`${fw.bundle_id}-${fw.section}`} bundleName={fw.bundle_name} section={fw.section} />
+        )),
+    },
+    {
+      id: 'tags',
+      header: 'Tags',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const tags = Array.isArray(row.original.tags) ? row.original.tags : [];
+        return tags.length > 0 ? (
+          tags.map((t) => (
+            <span key={t} className="badge" style={{ fontSize: 11, padding: '1px 6px', marginRight: 'var(--ss-space-xs)', opacity: 0.7 }}>
+              {t}
+            </span>
+          ))
+        ) : (
+          <span className="muted">{'—'}</span>
+        );
+      },
+    },
+  ];
 
   async function handleSave() {
     setSaving(true);
@@ -1005,17 +1055,15 @@ function ControlPicker({
 
   if (!initialLoaded) return <p>Loading profile controls...</p>;
 
-  const allVisibleSelected = controls.length > 0 && controls.every((c) => selectedIds.has(c.control_id));
-
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--ss-space-lg)' }}>
         <div>
-          <button className="btn btn-sm" onClick={onClose} style={{ marginRight: 12 }}>
+          <button className="btn btn-sm" onClick={onClose} style={{ marginRight: 'var(--ss-space-md)' }}>
             &larr; Back to profiles
           </button>
           <strong>Edit profile controls</strong>
-          <span className="muted" style={{ marginLeft: 12 }}>
+          <span className="muted" style={{ marginLeft: 'var(--ss-space-md)' }}>
             {selectedIds.size} control{selectedIds.size !== 1 ? 's' : ''} selected
           </span>
         </div>
@@ -1025,7 +1073,7 @@ function ControlPicker({
       </div>
 
       {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 'var(--ss-space-sm)', flexWrap: 'wrap', marginBottom: 'var(--ss-space-lg)' }}>
         <select value={framework} onChange={(e) => setFramework(e.target.value)} style={{ minWidth: 140 }}>
           <option value="">All frameworks</option>
           {frameworkOptions.map((f) => (
@@ -1066,78 +1114,22 @@ function ControlPicker({
         <p className="muted">No controls match the current filters.</p>
       )}
 
+      {/* Selectable DataTable: clicking the row OR its checkbox toggles
+          membership. DataTable has no per-row style API, so the legacy
+          selected-row tint is dropped \u2014 the checkbox + footer count convey
+          selection instead. */}
       {controls.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 36 }}>
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={toggleAll}
-                  title="Toggle all visible"
-                />
-              </th>
-              <th>Control ID</th>
-              <th>Name</th>
-              <th>Severity</th>
-              <th>Engine</th>
-              <th>Frameworks</th>
-              <th>Tags</th>
-            </tr>
-          </thead>
-          <tbody>
-            {controls.map((c) => {
-              const checked = selectedIds.has(c.control_id);
-              const tags = Array.isArray(c.tags) ? c.tags : [];
-              return (
-                <tr
-                  key={c.control_id}
-                  style={{ cursor: 'pointer', background: checked ? 'rgba(15, 118, 110, 0.05)' : undefined }}
-                  onClick={() => toggleControl(c.control_id)}
-                >
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleControl(c.control_id)}
-                    />
-                  </td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{c.control_id}</td>
-                  <td>{c.name}</td>
-                  <td>
-                    {c.severity
-                      ? <SeverityBadge severity={c.severity} />
-                      : <span className="muted">{'\u2014'}</span>}
-                  </td>
-                  <td>{c.engine}</td>
-                  <td>
-                    {c.frameworks.map((fw) => (
-                      <FrameworkChip
-                        key={`${fw.bundle_id}-${fw.section}`}
-                        bundleName={fw.bundle_name}
-                        section={fw.section}
-                      />
-                    ))}
-                  </td>
-                  <td>
-                    {tags.length > 0
-                      ? tags.map((t) => (
-                          <span
-                            key={t}
-                            className="badge"
-                            style={{ fontSize: 11, padding: '1px 6px', marginRight: 4, opacity: 0.7 }}
-                          >
-                            {t}
-                          </span>
-                        ))
-                      : <span className="muted">{'\u2014'}</span>}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={controls}
+          getRowId={(c) => c.control_id}
+          selectable
+          selectedIds={selectedIds}
+          onToggleRow={(id) => toggleControl(id)}
+          onToggleAll={toggleAll}
+          onRowClick={(c) => toggleControl(c.control_id)}
+          initialSorting={[{ id: 'control_id', desc: false }]}
+        />
       )}
 
       {/* Selected controls summary strip */}
@@ -1145,13 +1137,13 @@ function ControlPicker({
         <div style={{
           position: 'sticky',
           bottom: 0,
-          background: '#f9fafb',
-          borderTop: '1px solid #e5e7eb',
-          padding: '12px 16px',
+          background: 'var(--ss-bg-raised)',
+          borderTop: '1px solid var(--ss-border-default)',
+          padding: 'var(--ss-space-md) var(--ss-space-lg)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginTop: 16,
+          marginTop: 'var(--ss-space-lg)',
         }}>
           <span>{selectedIds.size} control{selectedIds.size !== 1 ? 's' : ''} selected</span>
           <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
