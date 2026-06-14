@@ -49,13 +49,22 @@ PR keeps review tractable.
 ## Environment gotchas (homelab)
 
 - **`kubectl` "no route to host 192.168.0.210:6443" — usually macOS Local Network
-  Privacy** (confirmed 2026-06-14), not a route hijack. Every Homebrew/third-party
-  binary (kubectl, brew `python3`, helm…) gets `EHOSTUNREACH` to the homelab LAN when
-  the terminal app (**Ghostty**) lacks Local Network permission; Apple-signed tools
-  (`ping`/`nc`/`curl`) are exempt, so **ping/nc work while kubectl doesn't**. **Diagnose:**
-  if `nc -z 192.168.0.210 6443` succeeds but `kubectl` says no-route → it's this. **Fix:**
-  System Settings → Privacy & Security → Local Network → enable **Ghostty** (or click the
-  allow popup). A reboot "fixes" it only by re-triggering that prompt.
+  Privacy** (confirmed 2026-06-14), not a route hijack. Homebrew/third-party binaries
+  (kubectl, brew `python3`, helm…) get `EHOSTUNREACH` to the homelab LAN; Apple-signed
+  `ping`/`nc`/`curl` are exempt, so **ping/nc work while kubectl doesn't**. **The axis is
+  GUI session vs SSH session:**
+    - **RDP / console** (Ghostty granted) → kubectl WORKS.
+    - **SSH session** (`sshd` → zellij → agent → kubectl — i.e. an agent running remotely)
+      → no GUI app to carry the grant → BLOCKED. Granting Ghostty fixes only the GUI
+      session, **not** SSH.
+  **Diagnose:** `echo $SSH_CONNECTION` set + `nc -z 192.168.0.210 6443` succeeds but
+  `kubectl` says no-route → it's this. **Fix (SSH session):** `sudo launchctl asuser
+  $(id -u) kubectl …` to re-parent into the logged-in GUI session (needs root; may pop a
+  one-time allow prompt in the RDP session → Allow) · OR run cluster ops from the RDP/console
+  terminal · OR use the public ingress (`app.silkstrand.io`/`api.silkstrand.io`) for HTTP-level
+  checks (internet, never blocked). **Fix (GUI session):** System Settings → Privacy &
+  Security → Local Network → enable **Ghostty**. A reboot "fixes" the GUI case by re-triggering
+  the prompt.
 - **Less common: a real colima/Docker route hijack** — if colima is actually running
   (esp. `--network-mode bridged`) it can shadow the LAN route. Then `nc`/`ping` also fail.
   Do kubectl work before starting Docker; reboot or stop colima clears it.
