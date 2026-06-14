@@ -6,7 +6,7 @@ as the same agent and the server resumes its in-flight chunk), and ships with a
 scoped egress NetworkPolicy.
 
 This chart is the productionized form of the manifest validated end-to-end in
-[ADR 016](../../../docs/adr/016-agent-pooling-lease-dispatch.md) work.
+the ADR 016 (agent pooling + lease dispatch, proposed — #385) work.
 
 ## Install
 
@@ -32,7 +32,7 @@ Mint the install token from the tenant UI (Agents → Add Agent) or the API.
 | `networkPolicy.enabled` | `true` | Egress allow: internet `:443` (Cloudflare WSS + recon download) + LAN scan CIDRs + DNS. Needed in default-deny-egress namespaces. |
 | `imagePullSecrets` | `[]` | The agent registry needs auth (#369). |
 | `resources` | `req 100m/256Mi · lim 1/1Gi` | Sized from measured usage (nuclei bursts to ~0.5 core/~450Mi). |
-| `replicaCount` | `1` | **Keep at 1.** Multi-agent pools are ADR 016 (per-member identity + pool-join token), not this chart. |
+| `replicaCount` | `1` | **Keep at 1.** Multi-agent pools are ADR 016 (proposed) (per-member identity + pool-join token), not this chart. |
 
 ## NetworkPolicy boundary (read before relying on it)
 - The built-in egress allows `0.0.0.0/0:443` (Cloudflare WSS + `downloads.silkstrand.io`) + the scan CIDRs + DNS. FQDN egress isn't expressible in standard NetworkPolicy and Cloudflare's ranges change, so broad `:443` is intentional.
@@ -45,8 +45,8 @@ Mint the install token from the tenant UI (Agents → Add Agent) or the API.
   `in_container=false` (detection is Docker-`/.dockerenv`-specific). Tracked
   separately; affects the "Recreate vs Upgrade" UX, not scanning.
 - **`replicaCount > 1`**: hard-rejected at template time (single RWO creds +
-  single identity). Horizontal pools require ADR 016 (lease-based claim +
-  pool-join enrollment).
+  single identity). Horizontal pools require ADR 016 (proposed) (lease-based
+  claim + pool-join enrollment).
 - **Identity source**: with `auth.installToken`, the **PVC** holds the
   bootstrapped identity (resume across restarts). With `auth.agentId`+`agentKey`,
   the **env** is the identity and the PVC only caches runtime state.
