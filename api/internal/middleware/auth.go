@@ -6,9 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jtb75/silkstrand/api/internal/audit"
 )
 
 // Auth validates HS256-signed tenant JWTs issued by the backoffice. The
@@ -35,9 +38,29 @@ func Auth(jwtSecret string) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := SetClaims(r.Context(), claims)
+			// Stash request-scoped audit metadata so audit.Writer.Emit can
+			// enrich payloads with ip/user_agent/actor_email without per-site
+			// churn. Empty values are dropped inside WithRequestMetadata.
+			ctx = audit.WithRequestMetadata(ctx, clientIP(r), r.UserAgent(), claims.Email)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// clientIP returns the originating client IP. traefik/cloudflared sit in front,
+// so honor the first hop of X-Forwarded-For when present; otherwise fall back to
+// the connection's RemoteAddr host (stripping the port).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // Expected JWT iss/aud values for tenant tokens (audit 3.4). Matches the

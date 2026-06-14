@@ -324,7 +324,7 @@ func (h *CredentialsHandler) CreateSource(w http.ResponseWriter, r *http.Request
 		TenantID: claims.TenantID, EventType: audit.EventCredentialCreated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "credential_source", ResourceID: id,
-		Payload: map[string]any{"type": req.Type, "name": req.Name},
+		Payload: map[string]any{"type": req.Type, "name": req.Name, "resource_label": req.Name},
 	})
 	cs, err := h.store.GetCredentialSource(r.Context(), id)
 	if err != nil || cs == nil {
@@ -472,6 +472,7 @@ func (h *CredentialsHandler) UpdateSource(w http.ResponseWriter, r *http.Request
 		TenantID: claims.TenantID, EventType: audit.EventCredentialUpdated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "credential_source", ResourceID: id,
+		Payload: map[string]any{"resource_label": name},
 	})
 	cs, _ := h.store.GetCredentialSource(r.Context(), id)
 	if cs == nil {
@@ -508,6 +509,7 @@ func (h *CredentialsHandler) DeleteSource(w http.ResponseWriter, r *http.Request
 		TenantID: claims.TenantID, EventType: audit.EventCredentialDeleted,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "credential_source", ResourceID: id,
+		Payload: map[string]any{"resource_label": existing.Name},
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -572,7 +574,7 @@ func (h *CredentialsHandler) TestSource(w http.ResponseWriter, r *http.Request) 
 		TenantID: claims.TenantID, EventType: audit.EventCredentialTest,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "credential_source", ResourceID: id,
-		Payload: map[string]any{"type": cs.Type},
+		Payload: map[string]any{"type": cs.Type, "resource_label": cs.Name},
 	})
 
 	// Agent-side test: forward to agent via Redis pub/sub.

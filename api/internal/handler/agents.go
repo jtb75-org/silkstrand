@@ -139,7 +139,7 @@ func (h *AgentsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		TenantID: claims.TenantID, EventType: audit.EventAgentCreated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "agent", ResourceID: agent.ID,
-		Payload: map[string]any{"name": req.Name},
+		Payload: map[string]any{"name": req.Name, "resource_label": req.Name},
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"agent":   agent,
@@ -238,6 +238,7 @@ func (h *AgentsHandler) RotateKey(w http.ResponseWriter, r *http.Request) {
 		TenantID: agent.TenantID, EventType: audit.EventAgentKeyRotated,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "agent", ResourceID: id,
+		Payload: map[string]any{"resource_label": agent.Name},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"api_key": rawKey})
 }
@@ -654,7 +655,7 @@ func (h *AgentsHandler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		TenantID: tok.TenantID, EventType: audit.EventAgentCreated,
 		ActorType:    audit.ActorSystem,
 		ResourceType: "agent", ResourceID: agent.ID,
-		Payload: map[string]any{"name": req.Name, "via": "bootstrap"},
+		Payload: map[string]any{"name": req.Name, "via": "bootstrap", "resource_label": req.Name},
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"agent_id": agent.ID,
@@ -737,7 +738,7 @@ func (h *AgentsHandler) Upgrade(w http.ResponseWriter, r *http.Request) {
 		TenantID: agent.TenantID, EventType: audit.EventAgentUpgraded,
 		ActorType: audit.ActorUser, ActorID: claimsActorID(claims),
 		ResourceType: "agent", ResourceID: id,
-		Payload: map[string]any{"version": req.Version},
+		Payload: map[string]any{"version": req.Version, "resource_label": agent.Name},
 	})
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":  "requested",
