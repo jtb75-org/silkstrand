@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Server, ServerOff } from 'lucide-react';
 import {
   listAgents, rotateAgentKey, deleteAgent, getAgentDownloads,
   upgradeAgent, getAgentAllowlist, listScans,
@@ -10,6 +12,8 @@ import { useAuth } from '../auth/useAuth';
 import AgentLogConsole from '../components/AgentLogConsole';
 import AddAgentModal from '../components/AddAgentModal';
 import CodeBlock from '../components/CodeBlock';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 export default function Agents() {
   const qc = useQueryClient();
@@ -83,20 +87,177 @@ export default function Agents() {
     },
   });
 
+  // Per-row actions. A plain render fn (not a component) so it closes over the
+  // mutations/setters without prop-drilling and without an inner component.
+  // Agents has no single row-detail action — multiple per-row actions instead —
+  // so rows are intentionally NOT clickable (no onRowClick / stopPropagation
+  // needed); the action buttons carry their own handlers.
+  const renderActions = (a: Agent) => (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'flex-end',
+        flexWrap: 'wrap',
+        gap: 'var(--ss-space-xs)',
+      }}
+    >
+      <button
+        className="btn btn-sm"
+        onClick={() => setConsoleFor(a)}
+        title="Open a live tail of this agent's log stream"
+      >
+        Console
+      </button>
+      <button
+        className="btn btn-sm"
+        onClick={() => setAllowlistFor(a)}
+        title="View the scan allowlist this agent most recently reported"
+      >
+        Allowlist
+      </button>
+      {a.status === 'connected' && (
+        a.in_container === false ? (
+          // Positively known binary install → in-place self-upgrade.
+          <button
+            className="btn btn-sm"
+            disabled={upgradeMutation.isPending}
+            onClick={() => {
+              if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
+                upgradeMutation.mutate(a.id);
+              }
+            }}
+          >
+            Upgrade
+          </button>
+        ) : (
+          // Container (true) → recreate; unknown (null/undefined, e.g. agents
+          // predating mode reporting) → modal offers both rather than guessing
+          // in-place and silently failing.
+          <button
+            className="btn btn-sm"
+            title={a.in_container ? 'Container agents upgrade by recreating from the new image' : "This agent's deployment mode isn't known yet"}
+            onClick={() => setRecreateFor(a)}
+          >
+            {a.in_container ? 'Recreate from image' : 'Upgrade…'}
+          </button>
+        )
+      )}
+      <button
+        className="btn btn-sm"
+        disabled={rotateMutation.isPending}
+        onClick={() => {
+          if (confirm(`Rotate the API key for ${a.name}? The current key keeps working until the agent reconnects with the new one.`)) {
+            rotateMutation.mutate(a.id);
+          }
+        }}
+      >
+        Rotate key
+      </button>
+      <button
+        className="btn btn-sm btn-danger"
+        disabled={deleteMutation.isPending}
+        onClick={() => {
+          if (confirm(`Delete agent ${a.name}? This revokes its key immediately.`)) {
+            deleteMutation.mutate(a.id);
+          }
+        }}
+      >
+        Delete
+      </button>
+    </div>
+  );
+
+  const columns: ColumnDef<Agent>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      accessorFn: (a) => a.name,
+      cell: ({ row }) => {
+        const a = row.original;
+        return (
+          <>
+            {a.name}
+            {a.zone && (
+              <span className="muted" style={{ display: 'block', fontSize: 12 }}>
+                zone: {a.zone}
+              </span>
+            )}
+          </>
+        );
+      },
+    },
+    {
+      id: 'id',
+      header: 'ID',
+      accessorFn: (a) => a.id,
+      cell: ({ row }) => (
+        <span className="text-muted" style={{ fontSize: 12 }}>{row.original.id.slice(0, 8)}…</span>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (a) => a.status,
+      cell: ({ row }) => {
+        const a = row.original;
+        return (
+          <>
+            {a.status}
+            {agentHasRunningScan.has(a.id) && (
+              <span
+                className="badge badge-completed"
+                style={{ marginLeft: 'var(--ss-space-sm)', display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}
+              >
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: 'var(--ss-success)',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }} />
+                Running scan
+              </span>
+            )}
+          </>
+        );
+      },
+    },
+    {
+      id: 'version',
+      header: 'Version',
+      accessorFn: (a) => a.version ?? '',
+      cell: ({ row }) => row.original.version ?? '—',
+    },
+    {
+      id: 'last_heartbeat',
+      header: 'Last heartbeat',
+      accessorFn: (a) => a.last_heartbeat ?? '',
+      cell: ({ row }) =>
+        row.original.last_heartbeat ? new Date(row.original.last_heartbeat).toLocaleString() : '—',
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => renderActions(row.original),
+    },
+  ];
+
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Agents</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <Server size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h1>Agents</h1>
+        </div>
         <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add Agent</button>
       </div>
 
       {newKey && (
-        <div className="detail-card" style={{ marginBottom: 24, borderColor: '#0f766e' }}>
+        <div className="detail-card" style={{ marginBottom: 'var(--ss-space-xl)', borderColor: 'var(--ss-accent-primary)' }}>
           <h3 style={{ marginTop: 0 }}>New API key for {newKey.agent.name}</h3>
           <p className="muted">Copy this now — it will not be shown again.</p>
           <pre
             style={{
-              background: '#f3f4f6', padding: 12, borderRadius: 6,
+              background: 'var(--ss-bg-raised)', padding: 'var(--ss-space-md)', borderRadius: 'var(--ss-radius-md)',
               userSelect: 'all', overflowX: 'auto',
             }}
           >{newKey.apiKey}</pre>
@@ -107,128 +268,18 @@ export default function Agents() {
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
       {!isLoading && agents && agents.length === 0 && (
-        <div className="detail-card">
-          <p style={{ marginTop: 0 }}>No agents registered yet.</p>
+        <EmptyState icon={<ServerOff />} title="No agents registered yet.">
           <button className="btn btn-primary" onClick={() => setShowAdd(true)}>+ Add your first agent</button>
-        </div>
+        </EmptyState>
       )}
 
       {agents && agents.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>ID</th>
-              <th>Status</th>
-              <th>Version</th>
-              <th>Last heartbeat</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {agents.map((a) => (
-              <tr key={a.id}>
-                <td>
-                  {a.name}
-                  {a.zone && (
-                    <span className="muted" style={{ display: 'block', fontSize: 12 }}>
-                      zone: {a.zone}
-                    </span>
-                  )}
-                </td>
-                <td className="text-muted" style={{ fontSize: 12 }}>{a.id.slice(0, 8)}…</td>
-                <td>
-                  {a.status}
-                  {agentHasRunningScan.has(a.id) && (
-                    <span
-                      className="badge badge-completed"
-                      style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                    >
-                      <span style={{
-                        width: 6, height: 6, borderRadius: '50%',
-                        background: 'var(--ss-success, #10b981)',
-                        animation: 'pulse 1.5s ease-in-out infinite',
-                      }} />
-                      Running scan
-                    </span>
-                  )}
-                </td>
-                <td>{a.version ?? '—'}</td>
-                <td>{a.last_heartbeat ? new Date(a.last_heartbeat).toLocaleString() : '—'}</td>
-                <td style={{ textAlign: 'right' }}>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    onClick={() => setConsoleFor(a)}
-                    title="Open a live tail of this agent's log stream"
-                  >
-                    Console
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    onClick={() => setAllowlistFor(a)}
-                    title="View the scan allowlist this agent most recently reported"
-                  >
-                    Allowlist
-                  </button>
-                  {a.status === 'connected' && (
-                    a.in_container === false ? (
-                      // Positively known binary install → in-place self-upgrade.
-                      <button
-                        className="btn btn-sm"
-                        style={{ marginRight: 6 }}
-                        disabled={upgradeMutation.isPending}
-                        onClick={() => {
-                          if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
-                            upgradeMutation.mutate(a.id);
-                          }
-                        }}
-                      >
-                        Upgrade
-                      </button>
-                    ) : (
-                      // Container (true) → recreate; unknown (null/undefined,
-                      // e.g. agents predating mode reporting) → modal offers both
-                      // rather than guessing in-place and silently failing.
-                      <button
-                        className="btn btn-sm"
-                        style={{ marginRight: 6 }}
-                        title={a.in_container ? 'Container agents upgrade by recreating from the new image' : "This agent's deployment mode isn't known yet"}
-                        onClick={() => setRecreateFor(a)}
-                      >
-                        {a.in_container ? 'Recreate from image' : 'Upgrade…'}
-                      </button>
-                    )
-                  )}
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    disabled={rotateMutation.isPending}
-                    onClick={() => {
-                      if (confirm(`Rotate the API key for ${a.name}? The current key keeps working until the agent reconnects with the new one.`)) {
-                        rotateMutation.mutate(a.id);
-                      }
-                    }}
-                  >
-                    Rotate key
-                  </button>
-                  <button
-                    className="btn btn-sm btn-danger"
-                    disabled={deleteMutation.isPending}
-                    onClick={() => {
-                      if (confirm(`Delete agent ${a.name}? This revokes its key immediately.`)) {
-                        deleteMutation.mutate(a.id);
-                      }
-                    }}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={agents}
+          getRowId={(a) => a.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
       )}
 
       {showAdd && (
@@ -264,7 +315,7 @@ export default function Agents() {
                 reporting). Choose the path that matches how it was installed:
               </p>
             )}
-            <p style={{ margin: '12px 0 4px', fontWeight: 600, fontSize: 14 }}>Container (docker)</p>
+            <p style={{ margin: 'var(--ss-space-md) 0 var(--ss-space-xs)', fontWeight: 600, fontSize: 14 }}>Container (docker)</p>
             <CodeBlock
               content={`curl -sSL ${installScriptURL || 'https://downloads.silkstrand.io/agent/install.sh'} | sudo sh -s -- \\\n  --mode=docker --upgrade --version=${downloads?.version ?? 'latest'}`}
             />
@@ -274,7 +325,7 @@ export default function Agents() {
             </p>
             {recreateFor.in_container !== true && (
               <>
-                <p style={{ margin: '16px 0 6px', fontWeight: 600, fontSize: 14 }}>Binary install</p>
+                <p style={{ margin: 'var(--ss-space-lg) 0 var(--ss-space-xs)', fontWeight: 600, fontSize: 14 }}>Binary install</p>
                 <button
                   className="btn btn-primary btn-sm"
                   disabled={upgradeMutation.isPending}
@@ -282,12 +333,12 @@ export default function Agents() {
                 >
                   Upgrade in place
                 </button>
-                <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                <p className="muted" style={{ fontSize: 13, marginTop: 'var(--ss-space-xs)' }}>
                   The agent downloads the new binary, verifies it, and restarts (~30s).
                 </p>
               </>
             )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--ss-space-lg)' }}>
               <button className="btn" onClick={() => setRecreateFor(null)}>Close</button>
             </div>
           </div>
@@ -380,7 +431,7 @@ function AllowlistModal({ agent, onClose }: { agent: Agent; onClose: () => void 
                   </>
                 )}
               </dl>
-              <section style={{ marginTop: 16 }}>
+              <section style={{ marginTop: 'var(--ss-space-lg)' }}>
                 <h3>Allow ({data.allow.length})</h3>
                 {data.allow.length === 0 ? (
                   <p className="muted">
@@ -393,7 +444,7 @@ function AllowlistModal({ agent, onClose }: { agent: Agent; onClose: () => void 
                 )}
               </section>
               {data.deny.length > 0 && (
-                <section style={{ marginTop: 16 }}>
+                <section style={{ marginTop: 'var(--ss-space-lg)' }}>
                   <h3>Deny ({data.deny.length})</h3>
                   <ul style={{ fontFamily: 'monospace', fontSize: 13 }}>
                     {data.deny.map((rule) => (<li key={rule}>{rule}</li>))}
