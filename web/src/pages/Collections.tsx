@@ -1,5 +1,7 @@
-import { Fragment, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Layers, FolderOpen } from 'lucide-react';
 import {
   listCollections,
   createCollection,
@@ -16,6 +18,8 @@ import type {
 } from '../api/types';
 import PredicateBuilder, { type Predicate } from '../components/PredicateBuilder';
 import { predicateToEnglish } from '../components/predicateToEnglish';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 // ADR 006 D5 — Collections replace Asset Sets. Two tabs:
 //   · My Collections — every collection the tenant has saved
@@ -35,7 +39,6 @@ export default function Collections() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabId>('mine');
   const [mode, setMode] = useState<FormMode | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data: all, isLoading, error } = useQuery({
     queryKey: ['collections'],
@@ -69,19 +72,88 @@ export default function Collections() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['collections'] }),
   });
 
-  function handleDelete(e: React.MouseEvent, c: Collection) {
-    e.stopPropagation();
-    if (!window.confirm(`Delete collection "${c.name}"?`)) return;
-    deleteMut.mutate(c.id);
-  }
-
   const submitting = createMut.isPending || updateMut.isPending;
   const submitError = createMut.error ?? updateMut.error;
 
+  // Per-row actions (action-only — no row-click). Edit opens the form; Delete
+  // confirms then mutates.
+  const renderActions = (c: Collection) => (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--ss-space-xs)' }}>
+      <button className="btn btn-small" onClick={() => setMode({ kind: 'edit', c })}>Edit</button>
+      <button
+        className="btn btn-small btn-danger"
+        onClick={() => { if (window.confirm(`Delete collection "${c.name}"?`)) deleteMut.mutate(c.id); }}
+        disabled={deleteMut.isPending}
+      >
+        Delete
+      </button>
+    </div>
+  );
+
+  // The old per-row click toggled an inline query-preview sub-row; DataTable has
+  // no row-expand API (and we don't widen the locked contract), so the
+  // plain-English predicate becomes an always-visible Query column instead —
+  // same predicateToEnglish content, truncated with the full text on hover.
+  const columns: ColumnDef<Collection>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      accessorFn: (c) => c.name,
+      cell: ({ row }) => {
+        const c = row.original;
+        return (
+          <>
+            <strong>{c.name}</strong>
+            {c.description && <div className="muted" style={{ fontSize: 12 }}>{c.description}</div>}
+          </>
+        );
+      },
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      accessorFn: (c) => c.scope,
+      cell: ({ row }) => <span className={`badge badge-scope-${row.original.scope}`}>{row.original.scope}</span>,
+    },
+    ...(tab === 'widgets'
+      ? [{
+          id: 'widget',
+          header: 'Widget',
+          enableSorting: false,
+          cell: ({ row }: { row: { original: Collection } }) => (
+            <>
+              {row.original.widget_title || row.original.name}
+              <span className="muted" style={{ marginLeft: 'var(--ss-space-xs)' }}>· {row.original.widget_kind || 'list'}</span>
+            </>
+          ),
+        } as ColumnDef<Collection>]
+      : []),
+    { id: 'count', header: 'Count', enableSorting: false, cell: () => '—' },
+    {
+      id: 'query',
+      header: 'Query',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const eng = predicateToEnglish(row.original.predicate);
+        return <code className="muted" title={eng} style={{ fontSize: 12 }}>{eng.length > 80 ? `${eng.slice(0, 80)}…` : eng}</code>;
+      },
+    },
+    {
+      id: 'updated',
+      header: 'Last Updated',
+      accessorFn: (c) => c.updated_at,
+      cell: ({ row }) => new Date(row.original.updated_at).toLocaleString(),
+    },
+    { id: 'actions', header: '', enableSorting: false, cell: ({ row }) => renderActions(row.original) },
+  ];
+
   return (
     <div>
-      <div className="page-header">
-        <h1>Collections</h1>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <Layers size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h1>Collections</h1>
+        </div>
         <button
           className="btn btn-primary"
           onClick={() => setMode(mode ? null : { kind: 'new' })}
@@ -90,7 +162,7 @@ export default function Collections() {
         </button>
       </div>
 
-      <div className="tab-bar" role="tablist" style={{ marginBottom: 16 }}>
+      <div className="tab-bar" role="tablist" style={{ marginBottom: 'var(--ss-space-lg)' }}>
         <button
           role="tab"
           aria-selected={tab === 'mine'}
@@ -104,7 +176,7 @@ export default function Collections() {
           aria-selected={tab === 'widgets'}
           className={`btn btn-sm ${tab === 'widgets' ? 'btn-primary' : ''}`}
           onClick={() => setTab('widgets')}
-          style={{ marginLeft: 8 }}
+          style={{ marginLeft: 'var(--ss-space-sm)' }}
         >
           Dashboard Widgets
         </button>
@@ -125,91 +197,23 @@ export default function Collections() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
-      {!isLoading && filtered.length === 0 && (
-        <p className="muted">
-          {tab === 'widgets'
-            ? 'No dashboard widgets yet. Edit a collection and toggle "Show on dashboard".'
-            : 'No collections yet. Saved predicates power rules, dashboards, and scans.'}
-        </p>
+      {!isLoading && !error && filtered.length === 0 && (
+        <EmptyState
+          icon={<FolderOpen />}
+          title={
+            tab === 'widgets'
+              ? 'No dashboard widgets yet. Edit a collection and toggle "Show on dashboard".'
+              : 'No collections yet. Saved predicates power rules, dashboards, and scans.'
+          }
+        />
       )}
       {filtered.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              {tab === 'widgets' && <th>Widget</th>}
-              <th>Count</th>
-              <th>Last Updated</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((c) => {
-              const open = expanded === c.id;
-              return (
-                <Fragment key={c.id}>
-                  <tr
-                    className="clickable-row"
-                    onClick={() => setExpanded(open ? null : c.id)}
-                  >
-                    <td>
-                      <strong>{c.name}</strong>
-                      {c.description && (
-                        <div className="muted" style={{ fontSize: 12 }}>
-                          {c.description}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`badge badge-scope-${c.scope}`}>{c.scope}</span>
-                    </td>
-                    {tab === 'widgets' && (
-                      <td>
-                        {c.widget_title || c.name}
-                        <span className="muted" style={{ marginLeft: 6 }}>
-                          · {c.widget_kind || 'list'}
-                        </span>
-                      </td>
-                    )}
-                    <td>—</td>
-                    <td>{new Date(c.updated_at).toLocaleString()}</td>
-                    <td style={{ display: 'flex', gap: 4 }}>
-                      <button
-                        className="btn btn-small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setMode({ kind: 'edit', c });
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="btn btn-small btn-danger"
-                        onClick={(e) => handleDelete(e, c)}
-                        disabled={deleteMut.isPending}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                  {open && (
-                    <tr>
-                      <td colSpan={tab === 'widgets' ? 6 : 5} className="muted">
-                        <div style={{ padding: '8px 4px' }}>
-                          <div style={{ marginBottom: 4, fontSize: 12 }}>Query Preview:</div>
-                          <code style={{ whiteSpace: 'pre-wrap' }}>
-                            {predicateToEnglish(c.predicate)}
-                          </code>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={filtered}
+          getRowId={(c) => c.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
       )}
     </div>
   );
@@ -334,7 +338,7 @@ function CollectionForm({ mode, submitting, error, onSubmit }: FormProps) {
           </div>
         </>
       )}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 'var(--ss-space-sm)' }}>
         <button
           type="button"
           className="btn"
@@ -348,14 +352,14 @@ function CollectionForm({ mode, submitting, error, onSubmit }: FormProps) {
         </button>
       </div>
       {preview && (
-        <p className="muted" style={{ marginTop: 8 }}>
+        <p className="muted" style={{ marginTop: 'var(--ss-space-sm)' }}>
           Matches {preview.count} {scope}
           {preview.count === 1 ? '' : 's'}.
         </p>
       )}
       {previewErr && <p className="error">{previewErr}</p>}
       {error && <p className="error">{error}</p>}
-      <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+      <p className="muted" style={{ marginTop: 'var(--ss-space-md)', fontSize: 12 }}>
         Preview: <code>{predicateToEnglish(predicate)}</code>
       </p>
     </form>
