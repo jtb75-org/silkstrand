@@ -137,6 +137,15 @@ type Store interface {
 	ResetScanChunkToPending(ctx context.Context, chunkID string) error
 	CompleteScanChunk(ctx context.Context, chunkID string, assetsFound, hostsScanned int) (bool, error)
 	FailScanChunk(ctx context.Context, chunkID, reason string) (bool, error)
+	// UpdateScanChunkStage records the chunk's latest recon stage, returning
+	// true only when it changed AND the chunk is still running under the given
+	// scan — so a late asset_discovered batch for an already completed/failed
+	// chunk can't rewrite current_stage or emit a misleading running update
+	// (callers emit stage_progress on transition, not per batch). See #387.
+	UpdateScanChunkStage(ctx context.Context, scanID, chunkID, stage string) (bool, error)
+	// ListScanChunks returns a scan's chunks ordered by chunk_index for the
+	// scan-detail (drawer) initial state. Tenant-scoped via TenantID(ctx).
+	ListScanChunks(ctx context.Context, scanID string) ([]model.ScanChunk, error)
 	ResetRunningScanChunksForAgent(ctx context.Context, agentID string) ([]string, error)
 	ResetUnackedScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error)
 	ResetStaleRunningScanChunks(ctx context.Context, maxAge time.Duration) ([]string, error)

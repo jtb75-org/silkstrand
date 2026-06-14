@@ -365,6 +365,14 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			}
 			if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
 				handler.PublishScanStatusFromScan(ctx, bus, scan)
+				// #387: chunked scans signal "running" per chunk (chunk_started);
+				// non-chunked scans signal it once at the scan level.
+				if payload.ChunkID != "" {
+					emitScanProgress(ctx, s, bus, scan, model.ScanProgressChunkStarted, model.ScanStatusRunning,
+						&model.ScanProgressChunk{ChunkID: payload.ChunkID, Status: model.ScanChunkStatusRunning})
+				} else {
+					emitScanProgress(ctx, s, bus, scan, model.ScanProgressScanStarted, model.ScanStatusRunning, nil)
+				}
 			}
 			slog.Info("scan started", "agent_id", agentID, "scan_id", payload.ScanID)
 
@@ -388,6 +396,13 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 					slog.Warn("ignoring late discovery chunk failure", "agent_id", agentID, "scan_id", payload.ScanID, "chunk_id", payload.ChunkID)
 					return
 				}
+				// #387: per-chunk failure (parent stays "running"; the parent
+				// scan_failed, if retries are exhausted, fires once inside
+				// DispatchNextChunk — never here, to avoid duplicate terminals).
+				if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
+					emitScanProgress(ctx, s, bus, scan, model.ScanProgressChunkFailed, model.ScanStatusRunning,
+						&model.ScanProgressChunk{ChunkID: payload.ChunkID, Status: model.ScanChunkStatusFailed, ErrorMessage: payload.Error})
+				}
 				if _, err := sched.DispatchNextChunk(ctx, agentID, payload.ScanID); err != nil {
 					slog.Error("dispatching next discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
 				}
@@ -399,6 +414,8 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			}
 			if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
 				handler.PublishScanStatusFromScan(ctx, bus, scan)
+				// #387: non-chunked terminal failure (discovery or compliance).
+				emitScanProgress(ctx, s, bus, scan, model.ScanProgressScanFailed, model.ScanStatusFailed, nil)
 				auditW.Emit(ctx, audit.Event{
 					TenantID: scan.TenantID, EventType: audit.EventScanFailed,
 					ActorType: audit.ActorAgent, ActorID: agentID,
@@ -470,6 +487,17 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 					slog.Warn("ignoring late discovery chunk completion", "agent_id", agentID, "scan_id", payload.ScanID, "chunk_id", payload.ChunkID)
 					return
 				}
+				// #387: per-chunk completion. The parent scan_completed (if this
+				// was the last chunk) fires once inside DispatchNextChunk below.
+				if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
+					idx := payload.ChunkIndex
+					af, hs := payload.AssetsFound, payload.HostsScanned
+					emitScanProgress(ctx, s, bus, scan, model.ScanProgressChunkCompleted, model.ScanStatusRunning,
+						&model.ScanProgressChunk{
+							ChunkID: payload.ChunkID, ChunkIndex: &idx, Status: model.ScanChunkStatusCompleted,
+							AssetsFound: &af, HostsScanned: &hs,
+						})
+				}
 				if _, err := sched.DispatchNextChunk(ctx, agentID, payload.ScanID); err != nil {
 					slog.Error("dispatching next discovery chunk", "scan_id", payload.ScanID, "chunk_id", payload.ChunkID, "error", err)
 				}
@@ -483,6 +511,8 @@ func buildOnMessage(s store.Store, ps *pubsub.PubSub, notifier *notify.Dispatche
 			}
 			if scan, _ := s.GetScanByID(ctx, payload.ScanID); scan != nil {
 				handler.PublishScanStatusFromScan(ctx, bus, scan)
+				// #387: non-chunked discovery terminal (implicit single chunk).
+				emitScanProgress(ctx, s, bus, scan, model.ScanProgressScanCompleted, model.ScanStatusCompleted, nil)
 			}
 			slog.Info("discovery completed", "agent_id", agentID, "scan_id", payload.ScanID,
 				"assets_found", payload.AssetsFound, "hosts_scanned", payload.HostsScanned)
@@ -532,6 +562,30 @@ func redisPingFunc(ps *pubsub.PubSub) func(context.Context) error {
 // service, ...) tuples into assets + asset_endpoints, logs provenance,
 // derives asset_events for deltas, and runs the collection-aware rule
 // engine per endpoint.
+// emitScanProgress publishes a scan_progress event (#387) for the WSS ingest
+// path. It fetches the chunk summary so the rollup matches the REST snapshot
+// (both go through model.ScanRollup). status is the OVERALL scan status to
+// report — "running" for chunk-scoped events, terminal for scan-level ones.
+func emitScanProgress(ctx context.Context, s store.Store, bus events.Bus, scan *model.Scan, event, status string, chunk *model.ScanProgressChunk) {
+	if bus == nil || scan == nil {
+		return
+	}
+	var total, completed, failed int
+	if sum, err := s.ScanChunkSummary(ctx, scan.ID); err == nil && sum != nil {
+		total, completed, failed = sum.Total, sum.Completed, sum.Failed
+	}
+	t, c, f := model.ScanRollup(scan.ScanType, status, total, completed, failed)
+	events.PublishScanProgress(ctx, bus, scan.TenantID, model.ScanProgress{
+		ScanID:          scan.ID,
+		Event:           event,
+		Status:          status,
+		ChunksTotal:     t,
+		ChunksCompleted: c,
+		ChunksFailed:    f,
+		Chunk:           chunk,
+	})
+}
+
 func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.Dispatcher, sched scheduler.Dispatcher, bus events.Bus, auditW audit.Writer, agentID string, payload json.RawMessage) {
 	var batch websocket.AssetDiscoveredPayload
 	if err := json.Unmarshal(payload, &batch); err != nil {
@@ -549,6 +603,26 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 		}
 		scan.Status = model.ScanStatusRunning
 		handler.PublishScanStatusFromScan(ctx, bus, scan)
+	}
+
+	// #387: stage_progress. For chunked scans, persist the stage and emit only
+	// on change (UpdateScanChunkStage returns changed) to keep the SSE lean.
+	// Non-chunked discovery has no chunk row to dedupe against, so it emits the
+	// stage per batch — harmless, the UI applies it idempotently.
+	if batch.Stage != "" {
+		if batch.ChunkID != "" {
+			if changed, err := s.UpdateScanChunkStage(ctx, batch.ScanID, batch.ChunkID, batch.Stage); err != nil {
+				slog.Warn("updating chunk stage", "scan_id", scan.ID, "chunk_id", batch.ChunkID, "error", err)
+			} else if changed {
+				idx := batch.ChunkIndex
+				emitScanProgress(ctx, s, bus, scan, model.ScanProgressStageProgress, model.ScanStatusRunning,
+					&model.ScanProgressChunk{ChunkID: batch.ChunkID, ChunkIndex: &idx, Status: model.ScanChunkStatusRunning, CurrentStage: batch.Stage})
+			}
+		} else if scan.ScanType == model.ScanTypeDiscovery {
+			zero := 0
+			emitScanProgress(ctx, s, bus, scan, model.ScanProgressStageProgress, model.ScanStatusRunning,
+				&model.ScanProgressChunk{ChunkIndex: &zero, Status: model.ScanChunkStatusRunning, CurrentStage: batch.Stage})
+		}
 	}
 
 	// Load tenant rules + allowlist snapshot once per batch.
@@ -1172,6 +1246,8 @@ func handleScanResults(ctx context.Context, s store.Store, bus events.Bus, audit
 		}
 		if completedScan, _ := s.GetScanByID(ctx, wrapper.ScanID); completedScan != nil {
 			handler.PublishScanStatusFromScan(ctx, bus, completedScan)
+			// #387: compliance terminal — scan-level only (chunks_total=0).
+			emitScanProgress(ctx, s, bus, completedScan, model.ScanProgressScanCompleted, model.ScanStatusCompleted, nil)
 			auditW.Emit(ctx, audit.Event{
 				TenantID: completedScan.TenantID, EventType: audit.EventScanCompleted,
 				ActorType: audit.ActorAgent, ActorID: agentID,

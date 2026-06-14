@@ -228,14 +228,15 @@ func scanScan(sc *model.Scan, row interface{ Scan(...any) error }) error {
 		&sc.Status, &sc.ErrorMessage, &sc.StartedAt, &sc.CompletedAt, &sc.CreatedAt)
 }
 
-const scanChunkCols = `id, scan_id, tenant_id, agent_id, chunk_index, target_type, target_identifier, host(ip_start), host(ip_end), ip_count, status, attempts, assets_found, hosts_scanned, error_message, dispatched_at, started_at, completed_at, created_at, updated_at`
+const scanChunkCols = `id, scan_id, tenant_id, agent_id, chunk_index, target_type, target_identifier, host(ip_start), host(ip_end), ip_count, status, attempts, assets_found, hosts_scanned, error_message, dispatched_at, started_at, completed_at, created_at, updated_at, current_stage`
 
 func scanScanChunk(c *model.ScanChunk, row interface{ Scan(...any) error }) error {
 	return row.Scan(&c.ID, &c.ScanID, &c.TenantID, &c.AgentID,
 		&c.ChunkIndex, &c.TargetType, &c.TargetIdentifier,
 		&c.IPStart, &c.IPEnd, &c.IPCount, &c.Status, &c.Attempts,
 		&c.AssetsFound, &c.HostsScanned, &c.ErrorMessage,
-		&c.DispatchedAt, &c.StartedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt)
+		&c.DispatchedAt, &c.StartedAt, &c.CompletedAt, &c.CreatedAt, &c.UpdatedAt,
+		&c.CurrentStage)
 }
 
 func (s *PostgresStore) ListScans(ctx context.Context) ([]model.Scan, error) {
@@ -568,6 +569,53 @@ func (s *PostgresStore) FailScanChunk(ctx context.Context, chunkID, reason strin
 	}
 	n, _ := result.RowsAffected()
 	return n > 0, nil
+}
+
+// UpdateScanChunkStage stamps the chunk's latest recon stage, returning true
+// only when the value actually changed AND the chunk is still running under the
+// given scan — the caller emits a stage_progress event on transition rather
+// than per asset_discovered batch. The status='running' guard means a late
+// batch for an already completed/failed chunk updates 0 rows → no stale
+// "running" stage_progress after the chunk's terminal event (#387).
+func (s *PostgresStore) UpdateScanChunkStage(ctx context.Context, scanID, chunkID, stage string) (bool, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE scan_chunks
+		    SET current_stage = $1,
+		        updated_at = NOW()
+		  WHERE id = $2
+		    AND scan_id = $3
+		    AND status = $4
+		    AND current_stage IS DISTINCT FROM $1`,
+		stage, chunkID, scanID, model.ScanChunkStatusRunning)
+	if err != nil {
+		return false, fmt.Errorf("updating scan chunk stage: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	return n > 0, nil
+}
+
+// ListScanChunks returns a scan's chunks ordered by chunk_index, tenant-scoped,
+// for the scan-detail drawer's initial state (#387).
+func (s *PostgresStore) ListScanChunks(ctx context.Context, scanID string) ([]model.ScanChunk, error) {
+	tenantID := TenantID(ctx)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+scanChunkCols+`
+		   FROM scan_chunks
+		  WHERE scan_id = $1 AND tenant_id = $2
+		  ORDER BY chunk_index`, scanID, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("listing scan chunks: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ScanChunk
+	for rows.Next() {
+		var c model.ScanChunk
+		if err := scanScanChunk(&c, rows); err != nil {
+			return nil, fmt.Errorf("scanning scan chunk row: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func (s *PostgresStore) ResetRunningScanChunksForAgent(ctx context.Context, agentID string) ([]string, error) {
