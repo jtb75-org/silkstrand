@@ -49,7 +49,11 @@ type DiscoveryConfig struct {
 	RatePPS       int    `json:"rate_pps,omitempty"`
 	IncludeHTTPX  bool   `json:"include_httpx"`
 	IncludeNuclei bool   `json:"include_nuclei"`
-	BatchSize     int    `json:"batch_size,omitempty"`
+	// IncludeNucleiNetwork runs the ADR 019 P1 nuclei-network detection pass
+	// (naabu → nuclei-network → httpx) that backfills service/version for
+	// non-web ports. Default on; P2 depth-gating will toggle it per tier.
+	IncludeNucleiNetwork bool `json:"include_nuclei_network"`
+	BatchSize            int  `json:"batch_size,omitempty"`
 }
 
 // PipelineRequest packages everything the recon runner needs.
@@ -74,7 +78,7 @@ type PipelineResult struct {
 // suitable for the terminal discovery_completed message. Cancellation
 // of ctx propagates SIGTERM to subprocesses.
 func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
-	cfg := DiscoveryConfig{IncludeHTTPX: true, IncludeNuclei: true, BatchSize: 10}
+	cfg := DiscoveryConfig{IncludeHTTPX: true, IncludeNuclei: true, IncludeNucleiNetwork: true, BatchSize: 10}
 	if len(req.TargetConfig) > 0 {
 		_ = json.Unmarshal(req.TargetConfig, &cfg)
 	}
@@ -131,6 +135,20 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	slog.InfoContext(ctx, "naabu: complete", "scan_id", req.ScanID,
 		"open_ports", len(findings), "hosts", len(hostsSeen))
 
+	isHostname := classifyTarget(req.TargetIdentifier) == targetHostname
+
+	// Stage 1.5: nuclei-network service detection (ADR 019 P1). Probes every
+	// open host:port with network/detection templates, then classifies PER PORT
+	// after the full pass (buffered — avoids write-then-overwrite races):
+	// non-HTTP-only ports backfill service/version + are excluded from httpx;
+	// web/ambiguous/no-hit ports fall through to httpx (which owns web ports).
+	// Best-effort enrichment: a missing template set or an error logs + skips,
+	// never fails the scan.
+	excluded := map[string]struct{}{} // "ip:port" → don't send to httpx
+	if cfg.IncludeNucleiNetwork {
+		runNucleiNetworkStage(ctx, req, findings, isHostname, now, cfg.BatchSize, excluded)
+	}
+
 	if !cfg.IncludeHTTPX {
 		return &PipelineResult{AssetsFound: len(findings), HostsScanned: len(hostsSeen)}, nil
 	}
@@ -143,11 +161,13 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 	// httpx sets SNI + Host and we see the actual vhost behind a shared ingress,
 	// not its default backend — and the resulting asset is keyed on the name
 	// (ADR 014 D3). naabu still emitted the IP-keyed host asset above; the two
-	// cross-link by IP.
-	isHostname := classifyTarget(req.TargetIdentifier) == targetHostname
-
+	// cross-link by IP. (isHostname is computed above for the nuclei-network stage.)
 	httpInputs := make([]string, 0, len(findings))
 	for _, f := range findings {
+		// Skip ports nuclei-network identified as non-HTTP (ADR 019 D4).
+		if _, skip := excluded[fmt.Sprintf("%s:%d", f.IP, f.Port)]; skip {
+			continue
+		}
 		host := f.IP
 		if isHostname {
 			host = req.TargetIdentifier
