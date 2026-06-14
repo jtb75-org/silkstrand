@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
@@ -14,10 +15,13 @@ import (
 // AuditHandler serves the GET /api/v1/audit-events endpoint (ADR 005 D5).
 type AuditHandler struct {
 	db *sql.DB
+	// list is the audit-events query, seamed for tests; defaults to
+	// audit.ListAuditEvents.
+	list func(context.Context, *sql.DB, audit.ListFilter) (*audit.ListResult, error)
 }
 
 func NewAuditHandler(db *sql.DB) *AuditHandler {
-	return &AuditHandler{db: db}
+	return &AuditHandler{db: db, list: audit.ListAuditEvents}
 }
 
 // List returns audit events for the caller's tenant with optional filters.
@@ -35,6 +39,12 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetClaims(r.Context())
 	if claims == nil || claims.TenantID == "" {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	// Audit access is admin-only (ADR 005 OQ#2 — joe's decision). Enforced here
+	// at the API in addition to the client-side nav/page gate.
+	if claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "admin role required")
 		return
 	}
 
@@ -91,7 +101,7 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		f.CursorID = cid
 	}
 
-	result, err := audit.ListAuditEvents(r.Context(), h.db, f)
+	result, err := h.list(r.Context(), h.db, f)
 	if err != nil {
 		slog.Error("listing audit events", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list audit events")
