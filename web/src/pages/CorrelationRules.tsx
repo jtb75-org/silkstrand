@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Workflow, GitBranch } from 'lucide-react';
 import {
   listCorrelationRules,
   createCorrelationRule,
@@ -8,6 +10,8 @@ import {
   type UpsertRuleRequest,
 } from '../api/client';
 import type { CorrelationRule } from '../api/types';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
 
 // CRUD page for ADR 003 D2 correlation rules. Authoring is by raw
 // JSONB match + actions — no visual predicate builder in R1.5a (that
@@ -49,12 +53,6 @@ export default function CorrelationRules() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['correlation-rules'] }),
   });
 
-  function handleDelete(e: React.MouseEvent, r: CorrelationRule) {
-    e.stopPropagation();
-    if (!window.confirm(`Disable rule ${r.name}?`)) return;
-    deleteMut.mutate(r.id);
-  }
-
   // Show only the latest version per name in the list view. API
   // returns every version; we keep history out of sight for v1.
   const latestByName = (rules ?? []).reduce<Record<string, CorrelationRule>>((acc, r) => {
@@ -67,10 +65,41 @@ export default function CorrelationRules() {
   const submitting = createMut.isPending || updateMut.isPending;
   const submitError = createMut.error ?? updateMut.error;
 
+  // Per-row actions (action-only — no row-click). Delete is a soft "Disable".
+  const renderActions = (r: CorrelationRule) => (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--ss-space-xs)' }}>
+      <button className="btn btn-small" onClick={() => setMode({ kind: 'edit', rule: r })}>Edit</button>
+      <button
+        className="btn btn-small btn-danger"
+        onClick={() => { if (window.confirm(`Disable rule ${r.name}?`)) deleteMut.mutate(r.id); }}
+        disabled={deleteMut.isPending}
+      >
+        Disable
+      </button>
+    </div>
+  );
+
+  const columns: ColumnDef<CorrelationRule>[] = [
+    { id: 'name', header: 'Name', accessorFn: (r) => r.name },
+    { id: 'trigger', header: 'Trigger', accessorFn: (r) => r.trigger },
+    {
+      id: 'actions_summary',
+      header: 'Actions',
+      enableSorting: false,
+      cell: ({ row }) => (row.original.body?.actions ?? []).map((a) => a.type).join(', '),
+    },
+    { id: 'version', header: 'Version', accessorFn: (r) => r.version },
+    { id: 'enabled', header: 'Enabled', accessorFn: (r) => (r.enabled ? 'yes' : 'no') },
+    { id: 'actions', header: '', enableSorting: false, cell: ({ row }) => renderActions(row.original) },
+  ];
+
   return (
     <div>
-      <div className="page-header">
-        <h1>Correlation Rules</h1>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+          <Workflow size={24} style={{ color: 'var(--ss-accent-primary)' }} />
+          <h1>Correlation Rules</h1>
+        </div>
         <button
           className="btn btn-primary"
           onClick={() => setMode(mode ? null : { kind: 'new' })}
@@ -94,48 +123,19 @@ export default function CorrelationRules() {
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">{(error as Error).message}</p>}
-      {!isLoading && rows.length === 0 && (
-        <p className="muted">No rules yet. Add one to drive promote-to-compliance, notify, or one-shot scans.</p>
+      {!isLoading && !error && rows.length === 0 && (
+        <EmptyState
+          icon={<GitBranch />}
+          title="No rules yet. Add one to drive promote-to-compliance, notify, or one-shot scans."
+        />
       )}
       {rows.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Trigger</th>
-              <th>Actions</th>
-              <th>Version</th>
-              <th>Enabled</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.name}</td>
-                <td>{r.trigger}</td>
-                <td>{(r.body?.actions ?? []).map((a) => a.type).join(', ')}</td>
-                <td>{r.version}</td>
-                <td>{r.enabled ? 'yes' : 'no'}</td>
-                <td style={{ display: 'flex', gap: 4 }}>
-                  <button
-                    className="btn btn-small"
-                    onClick={() => setMode({ kind: 'edit', rule: r })}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-small btn-danger"
-                    onClick={(e) => handleDelete(e, r)}
-                    disabled={deleteMut.isPending}
-                  >
-                    Disable
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={columns}
+          data={rows}
+          getRowId={(r) => r.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+        />
       )}
     </div>
   );
