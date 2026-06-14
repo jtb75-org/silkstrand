@@ -37,8 +37,8 @@ colors:
   info: '#06b6d4'
   info-container: '#cffafe'
 typography:
-  # Spec'd in docs/design-system.md §4 (semantic, not shirt-sized). NOTE: these
-  # typography tokens are NOT yet defined in web/src/index.css — see §6 Gaps.
+  # Spec'd in docs/design-system.md §4 (semantic, not shirt-sized). Now also
+  # defined as --ss-text-*/--ss-font-*/--ss-leading-* in web/src/index.css (PR #424).
   h1:
     fontFamily: Inter
     fontSize: 28px
@@ -308,12 +308,14 @@ Settings). Keep the `DataTable` selection contract fixed; tokenize hex/spacing t
 `--ss-*`; use concrete px for type sizes until the typography tokens land (below).
 
 ### ⚠️ Known gaps & divergences (as-built vs. spec)
-- **Typography tokens are spec'd but not implemented.** `docs/design-system.md §4`
-  defines `--ss-text-*`, `--ss-font-*`, `--ss-leading-*`, but **none exist in
-  `web/src/index.css`** (which has only color/spacing/radius/shadow/motion). A
-  reference to `var(--ss-text-body-sm)` fell back to invalid and was replaced with a
-  concrete `13px` (PRs #409/#411). Closing this gap (adding the type scale to the
-  token layer) is the recommended next design-system task.
+- **Typography tokens — CLOSED (PR #424).** `docs/design-system.md §4`'s type scale
+  is now defined in `web/src/index.css` as `--ss-text-*` (sizes), `--ss-font-*`
+  (weights), and `--ss-leading-*` (line-heights), alongside the existing
+  color/spacing/radius/shadow/motion tokens. (Historically these were spec'd-but-absent,
+  so a `var(--ss-text-body-sm)` reference fell back to invalid and was replaced with a
+  concrete `13px` in PRs #409/#411; new code should use the tokens.) Remaining follow-up:
+  no webfont is loaded — §4.1's Inter isn't wired, so the UI still renders the system
+  stack; the size/weight/leading tokens are live regardless.
 - **Dark theme is defined but inert** — values exist under `[data-theme="dark"]`
   but no theme switch / pre-mount script is wired (spec §9 Phase 2).
 - **`.ss-*` adoption is partial.** Legacy classes (`.btn`, `.table`, `.badge-*`,
