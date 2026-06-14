@@ -586,16 +586,37 @@ func emitScanProgress(ctx context.Context, s store.Store, bus events.Bus, scan *
 	})
 }
 
-// stageNucleiNetwork is the asset_discovered batch stage for the ADR 019 P1
-// service-detection pass: its endpoint upserts are fill-only and it never
-// produces findings.
-const stageNucleiNetwork = "nuclei-network"
+// nuclei-network sub-pass stage labels (ADR 019). Detection (P1) backfills
+// service/version and emits NO findings; the vuln pass (P2/#377) emits
+// network_vuln findings. Both are fill-only for endpoint identity.
+const (
+	stageNucleiNetwork     = "nuclei-network"      // P1 detection (no findings)
+	stageNucleiNetworkVuln = "nuclei-network-vuln" // P2 vuln (findings)
+)
 
-// stageEmitsFindings reports whether an asset_discovered batch stage may create
-// findings. The nuclei-network detection pass is backfill-only (vulns are
-// P2/#377), so it never does — even if a CVE blob leaks into a batch.
+// isNetworkSubPass reports whether a stage is one of the nuclei-network
+// sub-passes — both upsert endpoints fill-only (existing-wins) so neither
+// clobbers httpx/detection-owned service/version/technologies (ADR 019 P2).
+func isNetworkSubPass(stage string) bool {
+	return stage == stageNucleiNetwork || stage == stageNucleiNetworkVuln
+}
+
+// stageEmitsFindings reports whether a stage may create findings. Only the
+// detection pass is backfill-only (vulns are P2); everything else — incl. the
+// vuln pass and nuclei-HTTP — may emit findings.
 func stageEmitsFindings(stage string) bool {
 	return stage != stageNucleiNetwork
+}
+
+// findingSource is the finding `source` for a stage. Network vulns are tagged
+// nuclei-network (ADR 019 D3) so they're distinguishable from HTTP nuclei
+// findings and don't collide on the (endpoint,source_kind,source,source_id)
+// upsert key.
+func findingSource(stage string) string {
+	if stage == stageNucleiNetworkVuln {
+		return "nuclei-network"
+	}
+	return "nuclei"
 }
 
 func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.Dispatcher, sched scheduler.Dispatcher, bus events.Bus, auditW audit.Writer, agentID string, payload json.RawMessage) {
@@ -604,7 +625,7 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 		slog.Error("parsing asset_discovered payload", "agent_id", agentID, "error", err)
 		return
 	}
-	nucleiNetwork := batch.Stage == stageNucleiNetwork
+	fillOnly := isNetworkSubPass(batch.Stage)
 	scan, err := s.GetScanByID(ctx, batch.ScanID)
 	if err != nil || scan == nil {
 		slog.Error("loading discovery scan", "scan_id", batch.ScanID, "error", err)
@@ -701,9 +722,10 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 			Version:         a.Version,
 			Technologies:    a.Technologies,
 			AllowlistStatus: awStatus,
-			// nuclei-network is a best-effort detection backfill: never
-			// overwrite httpx's richer fingerprint or a known label (ADR 019 P1).
-			FillOnly: nucleiNetwork,
+			// Both nuclei-network sub-passes are fill-only: never overwrite
+			// httpx's richer fingerprint or a known label, and (vuln pass) never
+			// let an empty technologies wipe httpx's (ADR 019 P1/P2).
+			FillOnly: fillOnly,
 		})
 		if err != nil {
 			slog.Error("upserting asset endpoint",
@@ -714,11 +736,11 @@ func handleAssetDiscovered(ctx context.Context, s store.Store, notifier *notify.
 		if err := s.AppendAssetEvents(tctx, events); err != nil {
 			slog.Error("appending asset events", "endpoint", ep.ID, "error", err)
 		}
-		// ADR 019 P1: the nuclei-network detection pass NEVER creates findings
-		// (vulns are P2/#377) — guard against any CVE blob leaking into a
-		// detection batch.
+		// ADR 019: the detection pass NEVER creates findings (vulns are P2);
+		// the vuln pass + nuclei-HTTP do. Source distinguishes network vulns
+		// (nuclei-network) from HTTP nuclei findings.
 		if stageEmitsFindings(batch.Stage) {
-			ingestNucleiFindings(tctx, s, scan.TenantID, scan.ID, ep.ID, a.CVEs)
+			ingestNucleiFindings(tctx, s, scan.TenantID, scan.ID, ep.ID, a.CVEs, findingSource(batch.Stage))
 		}
 		runRuleActions(tctx, s, notifier, sched, auditW, activeRules, asset, ep)
 	}
@@ -1102,7 +1124,7 @@ func runRuleActions(ctx context.Context, s store.Store, notifier *notify.Dispatc
 // (ADR 007 D2 network_vuln source). The upsert key is
 // (endpoint, source_kind, source, source_id) so rescans update
 // last_seen instead of duplicating.
-func ingestNucleiFindings(ctx context.Context, s store.Store, tenantID, scanID, endpointID string, raw json.RawMessage) {
+func ingestNucleiFindings(ctx context.Context, s store.Store, tenantID, scanID, endpointID string, raw json.RawMessage, source string) {
 	if len(raw) == 0 {
 		return
 	}
@@ -1112,7 +1134,13 @@ func ingestNucleiFindings(ctx context.Context, s store.Store, tenantID, scanID, 
 	}
 	sid := scanID
 	for _, hit := range arr {
+		// Tolerant SourceID: parser-native template_id, then the legacy
+		// nuclei-HTTP shape's `template`, then `id` as a last resort (ADR 019 P2,
+		// hero #8298 — handle both emit shapes).
 		templateID, _ := hit["template_id"].(string)
+		if templateID == "" {
+			templateID = stringFrom(hit, "template")
+		}
 		if templateID == "" {
 			if v, ok := hit["id"].(string); ok {
 				templateID = v
@@ -1138,7 +1166,7 @@ func ingestNucleiFindings(ctx context.Context, s store.Store, tenantID, scanID, 
 			AssetEndpointID: endpointID,
 			ScanID:          &sid,
 			SourceKind:      model.FindingSourceKindNetworkVuln,
-			Source:          "nuclei",
+			Source:          source,
 			SourceID:        templateID,
 			CVEID:           cvePtr,
 			Severity:        severity,
@@ -1165,6 +1193,11 @@ func firstCVE(hit map[string]any) string {
 		}
 	}
 	if s, ok := hit["cve_id"].(string); ok {
+		return s
+	}
+	// Legacy nuclei-HTTP shape put the CVE (or template) under `id`; accept it
+	// only when it's actually CVE-shaped (ADR 019 P2 tolerant parse).
+	if s, ok := hit["id"].(string); ok && strings.HasPrefix(strings.ToUpper(s), "CVE-") {
 		return s
 	}
 	return ""
