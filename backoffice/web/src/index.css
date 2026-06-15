@@ -327,6 +327,20 @@ a:hover {
   color: #999;
 }
 
+/* Visually-hidden label, still read by assistive tech (e.g. an icon-only or
+   empty table header that needs an accessible name). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .back-link {
   display: inline-block;
   margin-bottom: 12px;

@@ -1,11 +1,16 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Users as UsersIcon, UserCheck, UserMinus, Trash2, X } from 'lucide-react';
 import {
   listUsers, getUser, updateUserStatus, deleteUser,
   updateUserMembershipStatus, removeUserMembership,
 } from '../api/client';
-import type { User, UserDetail } from '../api/types';
+import type { User, UserDetail, UserMembership } from '../api/types';
 import StatusBadge from '../components/StatusBadge';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
+import Menu from '../components/Menu';
 
 export default function Users() {
   const qc = useQueryClient();
@@ -13,7 +18,9 @@ export default function Users() {
     queryKey: ['users'],
     queryFn: listUsers,
   });
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Single-active below-table detail panel (DataTable has no row-expand API;
+  // ADR 018/020 deviation — row click toggles one open panel under the table).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
   const [deleteText, setDeleteText] = useState('');
 
@@ -29,8 +36,69 @@ export default function Users() {
       qc.invalidateQueries({ queryKey: ['users'] });
       setDeleteTarget(null);
       setDeleteText('');
+      setExpandedId((cur) => (cur === deleteTarget?.id ? null : cur));
     },
   });
+
+  const expandedUser = users?.find((u) => u.id === expandedId) ?? null;
+
+  const columns: ColumnDef<User>[] = [
+    { accessorKey: 'email', header: 'Email' },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    { accessorKey: 'tenant_count', header: 'Tenants' },
+    {
+      accessorKey: 'last_login_at',
+      header: 'Last login',
+      cell: ({ row }) => (
+        <span className="text-muted">
+          {row.original.last_login_at
+            ? new Date(row.original.last_login_at).toLocaleString()
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => new Date(row.original.created_at).toLocaleDateString(),
+    },
+    {
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const u = row.original;
+        const active = u.status === 'active';
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <Menu
+              ariaLabel={`Actions for ${u.email}`}
+              items={[
+                {
+                  key: 'status',
+                  label: active ? 'Suspend' : 'Reactivate',
+                  icon: active ? <UserMinus size={14} /> : <UserCheck size={14} />,
+                  onSelect: () =>
+                    statusMutation.mutate({ id: u.id, status: active ? 'suspended' : 'active' }),
+                },
+                {
+                  key: 'delete',
+                  label: 'Delete user',
+                  icon: <Trash2 size={14} />,
+                  destructive: true,
+                  onSelect: () => { setDeleteTarget(u); setDeleteText(''); },
+                },
+              ]}
+            />
+          </div>
+        );
+      },
+    },
+  ];
 
   return (
     <div>
@@ -38,41 +106,43 @@ export default function Users() {
         <h1>Users</h1>
       </div>
 
-      {isLoading && <p>Loading...</p>}
+      {isLoading && <p className="text-muted">Loading…</p>}
       {error && <p className="error">Failed to load users: {(error as Error).message}</p>}
-      {!isLoading && users && users.length === 0 && <p>No users yet.</p>}
+      {!isLoading && users && users.length === 0 && (
+        <EmptyState icon={<UsersIcon />} title="No users yet." />
+      )}
 
       {users && users.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th></th>
-              <th>Email</th>
-              <th>Status</th>
-              <th>Tenants</th>
-              <th>Last login</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <UserRow
-                key={u.id}
-                user={u}
-                expanded={expanded === u.id}
-                onToggle={() => setExpanded(expanded === u.id ? null : u.id)}
-                onToggleStatus={() =>
-                  statusMutation.mutate({
-                    id: u.id,
-                    status: u.status === 'active' ? 'suspended' : 'active',
-                  })
-                }
-                onDelete={() => { setDeleteTarget(u); setDeleteText(''); }}
-              />
-            ))}
-          </tbody>
-        </table>
+        <DataTable<User>
+          columns={columns}
+          data={users}
+          getRowId={(u) => u.id}
+          initialSorting={[{ id: 'email', desc: false }]}
+          onRowClick={(u) => setExpandedId((cur) => (cur === u.id ? null : u.id))}
+        />
+      )}
+
+      {expandedUser && (
+        <div className="detail-card" style={{ marginTop: 'var(--ss-space-lg)' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 'var(--ss-space-md)',
+            }}
+          >
+            <h2 style={{ margin: 0 }}>{expandedUser.email}</h2>
+            <button
+              className="ss-menu__trigger"
+              aria-label="Close details"
+              onClick={() => setExpandedId(null)}
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+          <UserDetailPanel userId={expandedUser.id} />
+        </div>
       )}
 
       {deleteTarget && (
@@ -114,49 +184,6 @@ export default function Users() {
   );
 }
 
-function UserRow({
-  user, expanded, onToggle, onToggleStatus, onDelete,
-}: {
-  user: User;
-  expanded: boolean;
-  onToggle: () => void;
-  onToggleStatus: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <>
-      <tr>
-        <td>
-          <button className="btn btn-sm" onClick={onToggle} aria-label="Expand">
-            {expanded ? '▾' : '▸'}
-          </button>
-        </td>
-        <td>{user.email}</td>
-        <td><StatusBadge status={user.status} /></td>
-        <td>{user.tenant_count}</td>
-        <td className="text-muted">
-          {user.last_login_at ? new Date(user.last_login_at).toLocaleString() : '—'}
-        </td>
-        <td>{new Date(user.created_at).toLocaleDateString()}</td>
-        <td style={{ textAlign: 'right' }}>
-          <button className="btn btn-sm" style={{ marginRight: 6 }} onClick={onToggleStatus}>
-            {user.status === 'active' ? 'Suspend' : 'Reactivate'}
-          </button>
-          <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
-        </td>
-      </tr>
-      {expanded && (
-        <tr>
-          <td></td>
-          <td colSpan={6}>
-            <UserDetailPanel userId={user.id} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
 function UserDetailPanel({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery<UserDetail>({
@@ -181,69 +208,92 @@ function UserDetailPanel({ userId }: { userId: string }) {
     },
   });
 
-  if (isLoading) return <p className="muted">Loading details…</p>;
+  if (isLoading) return <p className="text-muted">Loading details…</p>;
   if (error) return <p className="error">{(error as Error).message}</p>;
   if (!data) return null;
 
+  const membershipColumns: ColumnDef<UserMembership>[] = [
+    { accessorKey: 'tenant_name', header: 'Tenant' },
+    { accessorKey: 'dc_name', header: 'DC' },
+    {
+      accessorKey: 'environment',
+      header: 'Env',
+      cell: ({ row }) => (
+        <span className={`env-badge env-${row.original.environment}`}>
+          {row.original.environment}
+        </span>
+      ),
+    },
+    { accessorKey: 'role', header: 'Role' },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const m = row.original;
+        const active = m.status === 'active';
+        const busy = membershipStatus.isPending || removeMembership.isPending;
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <Menu
+              ariaLabel={`Actions for ${m.tenant_name} membership`}
+              items={[
+                {
+                  key: 'status',
+                  label: active ? 'Suspend' : 'Reactivate',
+                  icon: active ? <UserMinus size={14} /> : <UserCheck size={14} />,
+                  disabled: busy,
+                  onSelect: () =>
+                    membershipStatus.mutate({
+                      tenantId: m.tenant_id,
+                      status: active ? 'suspended' : 'active',
+                    }),
+                },
+                {
+                  key: 'remove',
+                  label: 'Remove from tenant',
+                  icon: <Trash2 size={14} />,
+                  destructive: true,
+                  disabled: busy,
+                  onSelect: () => {
+                    if (confirm(`Remove ${data.email} from ${m.tenant_name}?`)) {
+                      removeMembership.mutate(m.tenant_id);
+                    }
+                  },
+                },
+              ]}
+            />
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
-    <div style={{ padding: '12px 0' }}>
-      <h3 style={{ margin: '0 0 8px' }}>Tenant memberships</h3>
+    <div>
+      <h3 style={{ margin: '0 0 var(--ss-space-sm)' }}>Tenant memberships</h3>
       {data.memberships.length === 0 ? (
         <p className="text-muted">No memberships.</p>
       ) : (
-        <table className="table" style={{ marginBottom: 16 }}>
-          <thead>
-            <tr>
-              <th>Tenant</th>
-              <th>DC</th>
-              <th>Env</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.memberships.map((m) => (
-              <tr key={m.tenant_id}>
-                <td>{m.tenant_name}</td>
-                <td>{m.dc_name}</td>
-                <td><span className={`env-badge env-${m.environment}`}>{m.environment}</span></td>
-                <td>{m.role}</td>
-                <td><StatusBadge status={m.status} /></td>
-                <td style={{ textAlign: 'right' }}>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginRight: 6 }}
-                    onClick={() => membershipStatus.mutate({
-                      tenantId: m.tenant_id,
-                      status: m.status === 'active' ? 'suspended' : 'active',
-                    })}
-                    disabled={membershipStatus.isPending}
-                  >
-                    {m.status === 'active' ? 'Suspend' : 'Reactivate'}
-                  </button>
-                  <button
-                    className="btn btn-sm btn-danger"
-                    onClick={() => {
-                      if (confirm(`Remove ${data.email} from ${m.tenant_name}?`)) {
-                        removeMembership.mutate(m.tenant_id);
-                      }
-                    }}
-                    disabled={removeMembership.isPending}
-                  >
-                    Remove
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ marginBottom: 'var(--ss-space-lg)' }}>
+          <DataTable<UserMembership>
+            columns={membershipColumns}
+            data={data.memberships}
+            getRowId={(m) => m.tenant_id}
+            initialSorting={[{ id: 'tenant_name', desc: false }]}
+          />
+        </div>
       )}
 
       {data.pending_invites.length > 0 && (
         <>
-          <h3 style={{ margin: '0 0 8px' }}>Pending invitations</h3>
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
+          <h3 style={{ margin: '0 0 var(--ss-space-sm)' }}>Pending invitations</h3>
+          <ul style={{ margin: 0, paddingLeft: 'var(--ss-space-xl)' }}>
             {data.pending_invites.map((i) => (
               <li key={i.id}>
                 {i.role} invite, expires {new Date(i.expires_at).toLocaleDateString()}
