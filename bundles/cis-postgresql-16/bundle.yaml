@@ -3,6 +3,7 @@ name: CIS PostgreSQL 16 Benchmark
 version: 2.0.4
 framework: cis-postgresql-16
 engine: postgresql
+vendor_dir: content/vendor
 controls:
   - pg-log-destinations
   - pg-logging-collector

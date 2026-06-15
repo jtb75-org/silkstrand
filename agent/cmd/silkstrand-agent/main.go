@@ -342,6 +342,17 @@ func handleManifestScan(ctx context.Context, tun *tunnel.Tunnel, r runner.Runner
 		"controls", total,
 	)
 
+	// Resolve the vendored-deps dir once: bundle.yaml's vendor_dir wins; else
+	// default to content/vendor when present so bundles tagged before vendor_dir
+	// existed still get their deps on PYTHONPATH. Without this the controls fail
+	// with ModuleNotFoundError (e.g. pg8000).
+	vendorDir := manifest.VendorDir
+	if vendorDir == "" {
+		if _, err := os.Stat(filepath.Join(bundlePath, "content", "vendor")); err == nil {
+			vendorDir = "content/vendor"
+		}
+	}
+
 	var failedControls int
 	for i, controlID := range manifest.Controls {
 		slog.InfoContext(ctx, "executing control",
@@ -354,6 +365,7 @@ func handleManifestScan(ctx context.Context, tun *tunnel.Tunnel, r runner.Runner
 			BundlePath:   bundlePath,
 			ControlID:    controlID,
 			Entrypoint:   entrypoint,
+			VendorDir:    vendorDir,
 			TargetConfig: d.TargetConfig,
 			Credentials:  d.Credentials,
 		})
