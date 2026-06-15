@@ -60,13 +60,16 @@ function ChunkRow({ chunk }: { chunk: ChunkView }) {
   );
 }
 
-// streamPill maps the raw SSE status to an honest pill. "live" only when truly
-// connected; "—" when the scan isn't streaming (terminal/idle); otherwise the
-// raw transitional state (connecting/reconnecting/error) so a stuck stream is
-// visible. The full raw status is always in the title for diagnosability.
+// streamPill maps the raw SSE status to an honest pill. "—" when the scan isn't
+// streaming (terminal/idle) — checked FIRST because useEventStream leaves its
+// status at the last value (often 'connected') after `enabled` flips false on a
+// terminal scan, so a stale 'connected' must not render "live". Otherwise "live"
+// only when truly connected; else the raw transitional state
+// (connecting/reconnecting/error) so a stuck stream is visible. The full raw
+// status is always in the title for diagnosability.
 function streamPill(streamStatus: string, scanActive: boolean): { label: string; cls: string } {
-  if (streamStatus === 'connected') return { label: 'live', cls: 'badge-completed' };
   if (!scanActive) return { label: '—', cls: 'badge-pending' };
+  if (streamStatus === 'connected') return { label: 'live', cls: 'badge-completed' };
   if (streamStatus === 'error') return { label: 'stream error', cls: 'badge-failed' };
   return { label: streamStatus, cls: 'badge-pending' };
 }
