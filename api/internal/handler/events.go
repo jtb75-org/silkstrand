@@ -194,6 +194,18 @@ func (h *EventsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	// when logging/metrics middleware wraps the writer.
 	rc := http.NewResponseController(w)
 
+	// The server sets a 30s WriteTimeout for normal requests, but this stream
+	// is long-lived. The write deadline is absolute from connection open, so the
+	// SECOND heartbeat (~50s) lands past it — Flush errors, the handler returns,
+	// and the client reconnects, flapping the "live" pill every ~50s. Clear the
+	// write deadline so the stream isn't bounded by WriteTimeout. A writer that
+	// can't unwrap to the underlying conn returns ErrNotSupported; log and
+	// continue (no worse than the prior behavior) rather than drop the stream.
+	if err := clearStreamWriteDeadline(rc); err != nil {
+		slog.Warn("events stream: clearing write deadline failed; stream may drop at WriteTimeout",
+			"error", err)
+	}
+
 	// SSE headers. Nginx, Cloud Run, and EventSource all expect these.
 	h.writeSSEHeaders(w)
 	if err := rc.Flush(); err != nil {
@@ -242,6 +254,20 @@ func (h *EventsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 			_ = rc.Flush()
 		}
 	}
+}
+
+// writeDeadlineClearer is the subset of *http.ResponseController used to lift
+// the server WriteTimeout from the long-lived SSE stream. An interface so the
+// behavior is unit-testable without a live server/TCP connection.
+type writeDeadlineClearer interface {
+	SetWriteDeadline(time.Time) error
+}
+
+// clearStreamWriteDeadline sets a zero (no) write deadline so a long-lived
+// stream isn't cut off by the server's WriteTimeout. Returns the error so the
+// caller can log and degrade rather than fail the stream.
+func clearStreamWriteDeadline(rc writeDeadlineClearer) error {
+	return rc.SetWriteDeadline(time.Time{})
 }
 
 // writeSSEHeaders sets the standard Server-Sent-Events headers. Split

@@ -288,3 +288,39 @@ func stringSliceEq(a, b []string) bool {
 	}
 	return true
 }
+
+// fakeDeadliner records SetWriteDeadline calls for the SSE write-deadline test.
+type fakeDeadliner struct {
+	called bool
+	got    time.Time
+	err    error
+}
+
+func (f *fakeDeadliner) SetWriteDeadline(t time.Time) error {
+	f.called = true
+	f.got = t
+	return f.err
+}
+
+// The long-lived SSE stream must clear the server WriteTimeout (a zero/no
+// deadline), otherwise the second heartbeat lands past the 30s WriteTimeout and
+// the stream drops at ~50s.
+func TestClearStreamWriteDeadline(t *testing.T) {
+	f := &fakeDeadliner{}
+	if err := clearStreamWriteDeadline(f); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.called {
+		t.Fatal("SetWriteDeadline was not called")
+	}
+	if !f.got.IsZero() {
+		t.Errorf("write deadline = %v, want zero (no timeout)", f.got)
+	}
+}
+
+func TestClearStreamWriteDeadlineErrorPropagates(t *testing.T) {
+	f := &fakeDeadliner{err: http.ErrNotSupported}
+	if err := clearStreamWriteDeadline(f); err != http.ErrNotSupported {
+		t.Errorf("err = %v, want ErrNotSupported (caller logs + degrades)", err)
+	}
+}

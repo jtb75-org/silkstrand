@@ -117,6 +117,28 @@ export function mergeProgress(
   return { status, chunksTotal, chunksCompleted, chunksFailed, chunks, hasChunkModel };
 }
 
+// overallPercent derives the headline progress bar %. Multi-chunk scans use
+// chunk completion (done/total) — unchanged. A single-chunk discovery scan's
+// chunk count barely moves (0→100 in one step, since a /24 is one chunk at
+// DISCOVERY_CHUNK_IPS=1024), so it falls back to the single chunk's stage
+// progression (naabu→httpx→nuclei) → ~0/33/67/100 as stages advance. Compliance
+// (no chunk model) reports 100 when terminal, else 0.
+export function overallPercent(view: ProgressView): number {
+  if (!view.hasChunkModel) return isTerminal(view.status) ? 100 : 0;
+
+  if (view.chunksTotal > 1) {
+    return Math.round((view.chunksCompleted / view.chunksTotal) * 100);
+  }
+
+  // Single-chunk: chunk completion is all-or-nothing, so use stage progress.
+  if (isTerminal(view.status)) return 100;
+  const chunk = view.chunks[0];
+  if (!chunk) return 0;
+  if (isTerminal(chunk.status)) return 100;
+  const done = STAGES.filter((s) => stageState(s, chunk) === 'done').length;
+  return Math.round((done / STAGES.length) * 100);
+}
+
 export function stageState(stage: string, chunk: ChunkView): 'done' | 'active' | 'pending' {
   if (chunk.status === 'completed') return 'done';
   const si = stageOrder(stage);
