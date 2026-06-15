@@ -97,11 +97,21 @@ func (h *TenantHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		invitedBy = &claims.AdminID
 	}
 	expiry := time.Now().Add(adminInviteExpiry)
-	if _, err := h.store.CreateInvitation(r.Context(), tenantID, req.Email, req.Role, tokenHash, expiry, invitedBy); err != nil {
+	inv, err := h.store.CreateInvitation(r.Context(), tenantID, req.Email, req.Role, tokenHash, expiry, invitedBy)
+	if err != nil {
 		slog.Error("creating invitation", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create invitation")
 		return
 	}
+	// Audit here — the invitation persisted regardless of whether the follow-up
+	// email is disabled/fails (those return 202 below).
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionMemberInvite,
+		TargetType: "invitation",
+		TargetID:   inv.ID,
+		TenantID:   tenantID,
+		Metadata:   map[string]any{"email": req.Email, "role": req.Role},
+	})
 
 	inviteURL := h.tenantWebURL + "/accept-invite?token=" + plaintext
 	if h.mailer == nil {
@@ -116,12 +126,6 @@ func (h *TenantHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	audit.Log(r.Context(), h.store, r, audit.Entry{
-		Action:     audit.ActionMemberInvite,
-		TargetType: "invitation",
-		TenantID:   tenantID,
-		Metadata:   map[string]any{"email": req.Email, "role": req.Role},
-	})
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "invited"})
 }
 
@@ -164,6 +168,14 @@ func (h *TenantHandler) ResendInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to regenerate invitation")
 		return
 	}
+	// Audit here — the invitation was regenerated regardless of the email outcome.
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionInvitationResend,
+		TargetType: "invitation",
+		TargetID:   inviteID,
+		TenantID:   tenantID,
+		Metadata:   map[string]any{"email": match.Email},
+	})
 	inviteURL := h.tenantWebURL + "/accept-invite?token=" + plaintext
 	if h.mailer == nil {
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "regenerated_but_email_disabled"})
@@ -177,12 +189,6 @@ func (h *TenantHandler) ResendInvite(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	audit.Log(r.Context(), h.store, r, audit.Entry{
-		Action:     audit.ActionInvitationResend,
-		TargetType: "invitation",
-		TenantID:   tenantID,
-		Metadata:   map[string]any{"email": match.Email},
-	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -202,6 +208,7 @@ func (h *TenantHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 	audit.Log(r.Context(), h.store, r, audit.Entry{
 		Action:     audit.ActionInvitationCancel,
 		TargetType: "invitation",
+		TargetID:   inviteID,
 		TenantID:   tenantID,
 	})
 	w.WriteHeader(http.StatusNoContent)

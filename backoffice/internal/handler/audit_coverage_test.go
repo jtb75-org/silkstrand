@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jtb75/silkstrand/backoffice/internal/middleware"
 	"github.com/jtb75/silkstrand/backoffice/internal/model"
@@ -18,6 +19,7 @@ type auditStubStore struct {
 	store.Store
 	audits []model.AuditEntry
 	dc     *model.DataCenter
+	tenant *model.Tenant
 	member *model.Membership
 	admins int
 }
@@ -45,6 +47,19 @@ func (s *auditStubStore) GetMembership(context.Context, string, string) (*model.
 }
 func (s *auditStubStore) CountActiveAdmins(context.Context, string) (int, error) {
 	return s.admins, nil
+}
+func (s *auditStubStore) GetTenant(context.Context, string) (*model.Tenant, error) {
+	return s.tenant, nil
+}
+func (s *auditStubStore) CreateTenant(_ context.Context, t model.Tenant) (*model.Tenant, error) {
+	t.ID = "t-new"
+	return &t, nil
+}
+func (s *auditStubStore) UpdateTenantProvisioning(context.Context, string, string, *string) error {
+	return nil
+}
+func (s *auditStubStore) CreateInvitation(_ context.Context, tenantID, email, role string, _ []byte, _ time.Time, _ *string) (*model.Invitation, error) {
+	return &model.Invitation{ID: "inv-new", TenantID: tenantID, Email: email, Role: role}, nil
 }
 
 // auditFor returns the recorded entry with the given action (or fails).
@@ -146,6 +161,43 @@ func TestDataCenterDeleteAudits(t *testing.T) {
 		t.Fatalf("status = %d, want 204", w.Code)
 	}
 	auditFor(t, st.audits, "datacenter.delete")
+}
+
+func TestCreateInviteAuditsWhenEmailDisabled(t *testing.T) {
+	// Email disabled (nil mailer) → handler returns 202 BEFORE the old audit
+	// site; the audit must still fire (moved before the email branch) with a
+	// target_id.
+	st := &auditStubStore{tenant: &model.Tenant{ID: "t1", Name: "Acme"}}
+	h := NewTenantHandler(st, nil, nil, "https://app.example.com", nil)
+	r := adminReq(http.MethodPost, "/api/v1/tenants/t1/invites", `{"email":"x@y.io","role":"member"}`)
+	r.SetPathValue("id", "t1")
+	w := httptest.NewRecorder()
+	h.CreateInvite(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (email disabled); body=%s", w.Code, w.Body.String())
+	}
+	e := auditFor(t, st.audits, "member.invite")
+	if e.TargetID == nil || *e.TargetID != "inv-new" {
+		t.Errorf("target_id = %v, want inv-new", e.TargetID)
+	}
+}
+
+func TestTenantCreateAuditsOnProvisioningFailure(t *testing.T) {
+	// An undecryptable DC key forces the provisioning-failure 202 branch, which
+	// returns before the success audit site — tenant.create must still fire with
+	// target_id + failed provisioning metadata.
+	st := &auditStubStore{dc: &model.DataCenter{ID: "dc1", APIKeyEncrypted: []byte("x")}}
+	h := NewTenantHandler(st, nil, nil, "https://app.example.com", make([]byte, 32))
+	r := adminReq(http.MethodPost, "/api/v1/tenants", `{"name":"Acme","data_center_id":"dc1"}`)
+	w := httptest.NewRecorder()
+	h.Create(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (provisioning failed); body=%s", w.Code, w.Body.String())
+	}
+	e := auditFor(t, st.audits, "tenant.create")
+	if e.TargetID == nil || *e.TargetID != "t-new" {
+		t.Errorf("target_id = %v, want t-new", e.TargetID)
+	}
 }
 
 func TestTenantAuthUpdateMemberStatusAudits(t *testing.T) {
