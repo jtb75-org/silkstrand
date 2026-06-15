@@ -1,0 +1,48 @@
+name: Release Bundles
+
+# Publishes the CIS compliance bundles to the public MinIO host and registers
+# them with the DC API (sets bundles.gcs_path). Mirrors release-agent.yml's mc
+# pattern. Manual (workflow_dispatch) or a `bundle-v*` tag.
+#
+# Required repo secrets (in addition to the existing MINIO_ACCESS_KEY/SECRET):
+#   BUNDLE_PUBLISH_API_URL  DC API base URL (e.g. https://app.silkstrand.io)
+#   BUNDLE_PUBLISH_JWT      tenant JWT accepted by POST /api/v1/bundles/upload
+# Until those are configured, run scripts/publish-bundles.sh locally — the script
+# is the must-have; this workflow makes it CI-repeatable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundles:
+        description: "Space-separated bundle names (blank = all 3 CIS bundles)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "bundle-v*"
+
+env:
+  S3_ENDPOINT: https://s3.ng20.org
+  BUNDLE_BUCKET: silkstrand-agent-releases
+  BUNDLE_PREFIX: bundles/
+  BUNDLE_PUBLIC_BASE_URL: https://downloads.silkstrand.io/agent/bundles
+
+jobs:
+  publish-bundles:
+    name: Publish CIS bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up MinIO client (mc)
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+
+      - name: Publish + register bundles
+        env:
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          API_URL: ${{ secrets.BUNDLE_PUBLISH_API_URL }}
+          JWT: ${{ secrets.BUNDLE_PUBLISH_JWT }}
+        run: scripts/publish-bundles.sh ${{ github.event.inputs.bundles }}
