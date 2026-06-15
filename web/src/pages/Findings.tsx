@@ -131,16 +131,24 @@ export default function Findings() {
   });
 
   // Bulk suppress/reopen — no bulk endpoint exists, so fan out the existing
-  // per-id mutations and invalidate once. Clears the selection on success.
+  // per-id mutations with allSettled (so one failure doesn't abandon the rest),
+  // then throw on any failure so the error surfaces. Caches are invalidated in
+  // onSettled (a partial success still changed server state, so the table + an
+  // open drawer must refresh either way); selection is cleared only on full
+  // success so the user can retry the failures.
   const bulkMut = useMutation({
     mutationFn: async ({ ids, action }: { ids: string[]; action: 'suppress' | 'reopen' }) => {
       const fn = action === 'suppress' ? suppressFinding : reopenFinding;
-      await Promise.all(ids.map((id) => fn(id)));
+      const results = await Promise.allSettled(ids.map((id) => fn(id)));
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        throw new Error(`${ids.length - failed} of ${ids.length} applied · ${failed} failed`);
+      }
     },
-    onSuccess: () => {
+    onSuccess: () => setSelectedIds(new Set()),
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['findings'] });
       queryClient.invalidateQueries({ queryKey: ['finding'] });
-      setSelectedIds(new Set());
     },
   });
 
@@ -341,6 +349,7 @@ export default function Findings() {
           <button className="btn btn-sm" disabled={bulkMut.isPending} onClick={() => setSelectedIds(new Set())}>
             Clear
           </button>
+          {bulkMut.error && <span className="error">{(bulkMut.error as Error).message}</span>}
         </div>
       )}
 
