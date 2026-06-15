@@ -47,37 +47,38 @@ const defaultNaabuPorts = "21,22,23,25,53,80,110,111,135,139,143,389,443," +
 const capNetRaw = 13
 
 // hasRawSocketCapability reports whether the process can open raw sockets, which
-// naabu's default SYN scan requires. True when running as root (uid 0 holds all
-// caps) or when CAP_NET_RAW is in the effective set. A package var so tests can
+// naabu's default SYN scan requires. The effective capability set
+// (/proc/self/status CapEff) is authoritative when available — even for uid 0,
+// since a container can run as root with CAP_NET_RAW dropped (the agent helm
+// chart drops ALL caps). Only when CapEff is unavailable (non-Linux, or an
+// unreadable/garbled status file) do we fall back to the uid heuristic: a
+// non-container root typically can open raw sockets. A package var so tests can
 // stub it.
 var hasRawSocketCapability = func() bool {
-	if os.Geteuid() == 0 {
-		return true
+	if data, err := os.ReadFile("/proc/self/status"); err == nil {
+		if hasNetRaw, ok := parseCapEffNetRaw(data); ok {
+			return hasNetRaw
+		}
 	}
-	return effectiveCapsHaveNetRaw()
+	return os.Geteuid() == 0
 }
 
-// effectiveCapsHaveNetRaw parses /proc/self/status CapEff (Linux) for
-// CAP_NET_RAW. A non-Linux platform or an unreadable/garbled status file yields
-// false — assume no raw sockets, so CONNECT scan (which always works) is the
-// safe fallback.
-func effectiveCapsHaveNetRaw() bool {
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		rest, ok := strings.CutPrefix(line, "CapEff:")
-		if !ok {
+// parseCapEffNetRaw scans /proc/<pid>/status content for the CapEff line and
+// reports whether CAP_NET_RAW is set. ok is false when there is no parseable
+// CapEff line (non-Linux, or a garbled file), so the caller can fall back.
+func parseCapEffNetRaw(status []byte) (hasNetRaw, ok bool) {
+	for _, line := range strings.Split(string(status), "\n") {
+		rest, found := strings.CutPrefix(line, "CapEff:")
+		if !found {
 			continue
 		}
 		v, err := strconv.ParseUint(strings.TrimSpace(rest), 16, 64)
 		if err != nil {
-			return false
+			return false, false
 		}
-		return v&(1<<capNetRaw) != 0
+		return v&(1<<capNetRaw) != 0, true
 	}
-	return false
+	return false, false
 }
 
 // naabuScanArgs picks naabu's scan-mode args and a human reason. Precedence:
