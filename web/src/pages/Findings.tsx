@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { ShieldAlert, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import {
   listFindings,
+  getFinding,
   suppressFinding,
   reopenFinding,
   listCollections,
@@ -16,6 +17,7 @@ import type {
   Collection,
 } from '../api/types';
 import DataTable from '../components/DataTable';
+import CodeBlock from '../components/CodeBlock';
 
 type Tab = 'vulnerabilities' | 'compliance';
 
@@ -75,6 +77,7 @@ export default function Findings() {
   const [collectionId, setCollectionId] = useState('');
   const [since, setSince] = useState('');
   const [until, setUntil] = useState('');
+  const [openFinding, setOpenFinding] = useState<Finding | null>(null);
 
   const { data: collections } = useQuery<Collection[]>({
     queryKey: ['collections', { scope: 'finding' }],
@@ -97,12 +100,18 @@ export default function Findings() {
 
   const suppressMut = useMutation({
     mutationFn: (id: string) => suppressFinding(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['findings'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings'] });
+      queryClient.invalidateQueries({ queryKey: ['finding'] }); // refresh an open drawer
+    },
   });
 
   const reopenMut = useMutation({
     mutationFn: (id: string) => reopenFinding(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['findings'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings'] });
+      queryClient.invalidateQueries({ queryKey: ['finding'] });
+    },
   });
 
   // Column defs are inline (cheap; data is the stable react-query result).
@@ -148,14 +157,22 @@ export default function Findings() {
         return (
           <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
             {f.status === 'open' && (
-              <button className="btn btn-sm" onClick={() => suppressMut.mutate(f.id)} disabled={suppressMut.isPending}>
+              <button
+                className="btn btn-sm"
+                onClick={(e) => { e.stopPropagation(); suppressMut.mutate(f.id); }}
+                disabled={suppressMut.isPending}
+              >
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
                   <EyeOff size={14} /> Suppress
                 </span>
               </button>
             )}
             {f.status === 'suppressed' && (
-              <button className="btn btn-sm" onClick={() => reopenMut.mutate(f.id)} disabled={reopenMut.isPending}>
+              <button
+                className="btn btn-sm"
+                onClick={(e) => { e.stopPropagation(); reopenMut.mutate(f.id); }}
+                disabled={reopenMut.isPending}
+              >
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
                   <Eye size={14} /> Reopen
                 </span>
@@ -257,9 +274,122 @@ export default function Findings() {
         <DataTable
           columns={columns}
           data={findings}
+          getRowId={(f) => f.id}
+          onRowClick={(f) => setOpenFinding(f)}
           initialSorting={[{ id: 'severity', desc: true }]}
         />
       )}
+
+      {openFinding && (
+        <FindingDetailDrawer
+          finding={openFinding}
+          onClose={() => setOpenFinding(null)}
+          onSuppress={() => suppressMut.mutate(openFinding.id)}
+          onReopen={() => reopenMut.mutate(openFinding.id)}
+          suppressPending={suppressMut.isPending}
+          reopenPending={reopenMut.isPending}
+        />
+      )}
     </div>
+  );
+}
+
+function Field({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', gap: 'var(--ss-space-md)', padding: 'var(--ss-space-xs) 0' }}>
+      <span className="muted" style={{ minWidth: 96, fontSize: 'var(--ss-text-body-sm)' }}>{label}</span>
+      <span style={{ fontFamily: mono ? 'monospace' : undefined, fontSize: 'var(--ss-text-body-sm)', wordBreak: 'break-word' }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// Right-side detail drawer (reuses the shipped .drawer-* shell + CodeBlock).
+// Seeds from the clicked row for instant render, then fetches the full finding
+// via GET /findings/{id} so evidence/remediation (detail-only fields) are
+// present. Missing fields (no CVE / no evidence / no remediation) are omitted.
+function FindingDetailDrawer({
+  finding,
+  onClose,
+  onSuppress,
+  onReopen,
+  suppressPending,
+  reopenPending,
+}: {
+  finding: Finding;
+  onClose: () => void;
+  onSuppress: () => void;
+  onReopen: () => void;
+  suppressPending: boolean;
+  reopenPending: boolean;
+}) {
+  const { data, isFetching } = useQuery<Finding>({
+    queryKey: ['finding', finding.id],
+    queryFn: () => getFinding(finding.id),
+    initialData: finding,
+  });
+  const f = data ?? finding;
+  const evidence = f.evidence && Object.keys(f.evidence).length > 0 ? f.evidence : null;
+
+  return (
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer" role="dialog" aria-label="Finding detail">
+        <header className="drawer-header">
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+            <SeverityBadge severity={f.severity} />
+            <span>{f.title}</span>
+          </h2>
+          <button type="button" className="btn btn-sm" onClick={onClose}>×</button>
+        </header>
+        <div className="drawer-body">
+          <section>
+            <h3>General</h3>
+            <Field label="Severity" value={f.severity || '—'} />
+            <Field label="Status" value={<StatusBadge status={f.status} />} />
+            <Field label="Asset:Port" value={assetLabel(f)} mono />
+            <Field label="Source" value={`${f.source}${f.source_kind ? ` · ${f.source_kind}` : ''}`} />
+            {f.cve_id && <Field label="CVE" value={f.cve_id} mono />}
+            <Field label="First seen" value={new Date(f.first_seen).toLocaleString()} />
+            <Field label="Last seen" value={new Date(f.last_seen).toLocaleString()} />
+            {isFetching && <p className="muted" style={{ fontSize: 'var(--ss-text-body-sm)' }}>Loading details…</p>}
+          </section>
+
+          {evidence && (
+            <section>
+              <h3>Evidence</h3>
+              <CodeBlock content={JSON.stringify(evidence, null, 2)} />
+            </section>
+          )}
+
+          {f.remediation && (
+            <section>
+              <h3>Remediation</h3>
+              <p style={{ whiteSpace: 'pre-wrap' }}>{f.remediation}</p>
+            </section>
+          )}
+
+          <section>
+            <h3>Actions</h3>
+            {f.status === 'open' && (
+              <button className="btn btn-sm" onClick={onSuppress} disabled={suppressPending}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+                  <EyeOff size={14} /> Suppress
+                </span>
+              </button>
+            )}
+            {f.status === 'suppressed' && (
+              <button className="btn btn-sm" onClick={onReopen} disabled={reopenPending}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+                  <Eye size={14} /> Reopen
+                </span>
+              </button>
+            )}
+            {f.status === 'resolved' && <span className="muted">Resolved.</span>}
+          </section>
+        </div>
+      </aside>
+    </>
   );
 }
