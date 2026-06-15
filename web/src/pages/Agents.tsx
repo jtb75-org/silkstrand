@@ -251,7 +251,37 @@ export default function Agents() {
       id: 'version',
       header: 'Version',
       accessorFn: (a) => a.version ?? '',
-      cell: ({ row }) => row.original.version ?? '—',
+      cell: ({ row }) => {
+        const a = row.original;
+        const latest = downloads?.version;
+        // Only hint when we have a REAL latest version (not the "latest"
+        // fallback), the agent reports real semver (not "dev"/unset), they
+        // differ, and the agent is connected (can self-upgrade). Avoids false
+        // positives.
+        const updateAvailable =
+          a.status === 'connected' &&
+          !!a.version && a.version !== 'dev' &&
+          !!latest && latest !== 'latest' &&
+          a.version !== latest;
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+            {a.version ?? '—'}
+            {updateAvailable && (
+              <button
+                className="badge"
+                title={`Update available: ${latest}. Click to upgrade.`}
+                style={{
+                  background: 'var(--ss-warning)', color: 'var(--ss-text-on-accent)',
+                  border: 'none', cursor: 'pointer',
+                }}
+                onClick={(e) => { e.stopPropagation(); triggerUpgrade(a); }}
+              >
+                update available
+              </button>
+            )}
+          </span>
+        );
+      },
     },
     {
       id: 'last_heartbeat',
