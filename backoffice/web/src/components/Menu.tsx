@@ -22,8 +22,11 @@ interface MenuProps {
 // Menu — the design-system overflow / kebab row-action menu (ADR 020). A "⋮"
 // trigger button toggles a popup of action items. Accessible: the trigger
 // advertises aria-haspopup / aria-expanded, the popup is role="menu" with
-// role="menuitem" buttons, Escape and click-outside close it (returning focus
-// to the trigger), and ArrowUp/Down/Home/End move focus between items.
+// role="menuitem" buttons, and ArrowUp/Down/Home/End move focus between items.
+// Both Escape and click-outside close the menu and restore focus to the trigger
+// (the outside-close runs on mousedown, so if the user clicks another focusable
+// control that control still wins the ensuing focus — restoring the trigger only
+// matters when they click non-focusable space, rescuing focus from <body>).
 // Destructive items render via `--ss-danger`. Intended to live in a clickable
 // table row — it stops propagation so opening the menu never triggers row click.
 export default function Menu({ items, ariaLabel = 'Actions' }: MenuProps) {
@@ -38,12 +41,13 @@ export default function Menu({ items, ariaLabel = 'Actions' }: MenuProps) {
     if (focusTrigger) triggerRef.current?.focus();
   }, []);
 
-  // Close on outside click and on Escape (Escape returns focus to the trigger).
+  // Close on outside click and on Escape — both restore focus to the trigger
+  // via close(true) (see the component comment for the mousedown-ordering note).
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
+        close(true);
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
