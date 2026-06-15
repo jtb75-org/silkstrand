@@ -302,6 +302,7 @@ func run() error {
 	apiMux.HandleFunc("GET /api/v1/dashboard/kpis", dashH.GetKPIs)
 	apiMux.HandleFunc("GET /api/v1/dashboard/suggested-actions", dashH.GetSuggestedActions)
 	apiMux.HandleFunc("GET /api/v1/dashboard/recent-activity", dashH.GetRecentActivity)
+	apiMux.HandleFunc("GET /api/v1/dashboard/coverage-by-collection", dashH.GetCoverageByCollection)
 
 	// Audit events (ADR 005 D5).
 	apiMux.HandleFunc("GET /api/v1/audit-events", auditH.List)

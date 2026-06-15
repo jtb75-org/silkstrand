@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
+import { Layers } from 'lucide-react';
 import {
   getDashboardKpis,
   getSuggestedActions,
   getRecentActivity,
+  getCoverageByCollection,
   listAssets,
 } from '../api/client';
 import {
@@ -13,6 +15,15 @@ import {
   CollectionList,
 } from '../components/DashboardWidgets';
 import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+import EmptyState from '../components/EmptyState';
+
+// Coverage health pill thresholds (status tokens). ≥90 Optimized / 50-89
+// Review / <50 At Risk.
+function coverageHealth(pct: number): { label: string; color: string } {
+  if (pct >= 90) return { label: 'Optimized', color: 'var(--ss-success)' };
+  if (pct >= 50) return { label: 'Review', color: 'var(--ss-warning)' };
+  return { label: 'At Risk', color: 'var(--ss-danger)' };
+}
 
 // Severity heat colors. critical/medium/low/info map to semantic design tokens;
 // `high` is the one severity with no dedicated token (flagged for a future
@@ -48,6 +59,10 @@ export default function Dashboard() {
   const activityQ = useQuery({
     queryKey: ['dashboard', 'recent-activity'],
     queryFn: getRecentActivity,
+  });
+  const coverageQ = useQuery({
+    queryKey: ['dashboard', 'coverage-by-collection'],
+    queryFn: getCoverageByCollection,
   });
 
   // Unclassified Endpoints — in P1 the shape is "assets with unknown
@@ -153,6 +168,69 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+        <h2 style={{ fontSize: 'var(--ss-text-h3)', marginBottom: 'var(--ss-space-sm)' }}>
+          Coverage by collection
+        </h2>
+        {coverageQ.isLoading ? (
+          <p className="muted">Loading…</p>
+        ) : !coverageQ.data || coverageQ.data.items.length === 0 ? (
+          <EmptyState icon={<Layers />} title="No endpoint-scope collections yet." />
+        ) : (
+          <>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Collection</th>
+                  <th>Endpoints</th>
+                  <th style={{ width: '40%' }}>Coverage</th>
+                  <th>Health</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coverageQ.data.items.map((row) => {
+                  const health = coverageHealth(row.coverage_percent);
+                  return (
+                    <tr
+                      key={row.collection_id}
+                      className="clickable-row"
+                      onClick={() => navigate('/collections')}
+                    >
+                      <td>{row.name}</td>
+                      <td>{row.covered_endpoints}/{row.matched_endpoints}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-sm)' }}>
+                          <div className="ss-progress" style={{ flex: 1, minWidth: 120 }}>
+                            <div
+                              className="ss-progress-fill"
+                              style={{ width: `${row.coverage_percent}%`, background: health.color }}
+                            />
+                          </div>
+                          <span style={{ fontSize: 'var(--ss-text-body-sm)' }}>{row.coverage_percent}%</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span
+                          className="badge"
+                          style={{ background: health.color, color: 'var(--ss-text-on-accent)' }}
+                        >
+                          {health.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {coverageQ.data.truncated && (
+              <p className="muted" style={{ fontSize: 'var(--ss-text-body-sm)', marginTop: 'var(--ss-space-sm)' }}>
+                Showing the {coverageQ.data.items.length} lowest-coverage collections.
+              </p>
+            )}
+          </>
+        )}
+      </section>
     </div>
   );
 }
