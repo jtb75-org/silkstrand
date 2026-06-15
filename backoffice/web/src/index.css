@@ -1,3 +1,94 @@
+/* =========================================================================
+   Design-system tokens (ADR 020) — backoffice navy/teal theme.
+   Same `--ss-*` token NAMES as the tenant app (web/src/index.css) so shared
+   primitives (DataTable, EmptyState, Menu) port unchanged; the VALUES carry the
+   backoffice's navy/teal identity (navy headings #0d1b2a, teal accent #1b998b).
+   Additive only — existing page rules below still use literal hex and are
+   migrated page-by-page in later PRs. Status/spacing/radius/typography mirror
+   the tenant scale so the two design systems stay structurally identical.
+   ========================================================================= */
+:root {
+  /* Accent — brand teal */
+  --ss-accent-primary: #1b998b;
+  --ss-accent-hover: #158a7d;
+  --ss-accent-subtle: #117a6e;
+  --ss-accent-soft: #9fded5;
+
+  /* Status (shared semantics with tenant) */
+  --ss-success: #10b981;
+  --ss-warning: #f59e0b;
+  --ss-danger: #ef4444;
+  --ss-danger-hover: #dc2626;
+  --ss-info: #06b6d4;
+
+  /* Surfaces / text / borders — navy/teal admin theme */
+  --ss-bg-base: #f5f5f8;
+  --ss-bg-surface: #ffffff;
+  --ss-bg-subtle: #f8f9fb;
+  --ss-bg-raised: #fafafa;
+  --ss-text-primary: #0d1b2a; /* navy */
+  --ss-text-secondary: #334155;
+  --ss-text-muted: #666666;
+  --ss-text-on-accent: #ffffff;
+  --ss-border-subtle: #eeeeee;
+  --ss-border-default: #d0d0d0;
+  --ss-border-strong: #9ca3af;
+
+  /* Status background tints */
+  --ss-success-bg: #d1fae5;
+  --ss-warning-bg: #fef3c7;
+  --ss-danger-bg: #fee2e2;
+  --ss-info-bg: #dbeafe;
+
+  /* Spacing — 4px grid (shared) */
+  --ss-space-xs: 4px;
+  --ss-space-sm: 8px;
+  --ss-space-md: 12px;
+  --ss-space-lg: 16px;
+  --ss-space-xl: 24px;
+  --ss-space-2xl: 32px;
+  --ss-space-3xl: 48px;
+
+  /* Radius (shared) */
+  --ss-radius-sm: 4px;
+  --ss-radius-md: 6px;
+  --ss-radius-lg: 8px;
+  --ss-radius-full: 999px;
+
+  /* Shadow (shared) */
+  --ss-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --ss-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --ss-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+
+  /* Motion (shared) */
+  --ss-transition-fast: 120ms ease;
+  --ss-transition-base: 180ms ease;
+
+  /* Typography — sizes / weights / line-heights / families (shared scale).
+     Inter is not bundled in the backoffice yet, so --ss-font-sans starts at the
+     system stack; the token name matches the tenant app and can adopt Inter in
+     a later PR without touching consumers. */
+  --ss-text-caption: 12px;
+  --ss-text-body-sm: 13px;
+  --ss-text-body: 14px;
+  --ss-text-body-lg: 16px;
+  --ss-text-h4: 16px;
+  --ss-text-h3: 18px;
+  --ss-text-h2: 22px;
+  --ss-text-h1: 28px;
+  --ss-font-regular: 400;
+  --ss-font-medium: 500;
+  --ss-font-semibold: 600;
+  --ss-font-bold: 700;
+  --ss-leading-tight: 1.2;
+  --ss-leading-normal: 1.5;
+  --ss-leading-loose: 1.7;
+  --ss-font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --ss-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    monospace;
+}
+
 *,
 *::before,
 *::after {
@@ -605,4 +696,118 @@ a:hover {
   background: #fef3c7;
   color: #92400e;
   border: 1px solid #fcd34d;
+}
+
+/* =========================================================================
+   Design-system primitives (ADR 020) — token-driven, used by the ported
+   shared components (EmptyState, Menu). Additive; no existing page depends on
+   these classes yet.
+   ========================================================================= */
+
+/* EmptyState (§ design-system empty state) — muted icon + one-line title. */
+.ss-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ss-space-md);
+  padding: var(--ss-space-3xl) var(--ss-space-xl);
+  color: var(--ss-text-muted);
+  text-align: center;
+}
+
+.ss-empty .icon {
+  display: inline-flex;
+  color: var(--ss-border-strong);
+}
+
+/* Kebab / overflow Menu — a trigger button + an absolutely-positioned popup of
+   action items. The page wraps it in a position:relative cell. */
+.ss-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.ss-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ss-radius-md);
+  background: transparent;
+  color: var(--ss-text-muted);
+  cursor: pointer;
+  transition: background var(--ss-transition-fast),
+    border-color var(--ss-transition-fast);
+}
+
+.ss-menu__trigger:hover {
+  background: var(--ss-bg-raised);
+  color: var(--ss-text-primary);
+}
+
+.ss-menu__trigger:focus-visible {
+  outline: none;
+  border-color: var(--ss-accent-primary);
+}
+
+.ss-menu__trigger[aria-expanded='true'] {
+  background: var(--ss-bg-raised);
+  color: var(--ss-text-primary);
+}
+
+.ss-menu__popup {
+  position: absolute;
+  top: calc(100% + var(--ss-space-xs));
+  right: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: var(--ss-space-xs);
+  background: var(--ss-bg-surface);
+  border: 1px solid var(--ss-border-default);
+  border-radius: var(--ss-radius-md);
+  box-shadow: var(--ss-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ss-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--ss-space-sm);
+  width: 100%;
+  padding: var(--ss-space-sm) var(--ss-space-md);
+  border: none;
+  border-radius: var(--ss-radius-sm);
+  background: transparent;
+  color: var(--ss-text-primary);
+  font-size: var(--ss-text-body-sm);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ss-menu__item:hover,
+.ss-menu__item:focus-visible {
+  outline: none;
+  background: var(--ss-bg-subtle);
+}
+
+.ss-menu__item:disabled {
+  color: var(--ss-text-muted);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.ss-menu__item--danger {
+  color: var(--ss-danger);
+}
+
+.ss-menu__item--danger:hover,
+.ss-menu__item--danger:focus-visible {
+  background: var(--ss-danger-bg);
+  color: var(--ss-danger-hover);
 }
