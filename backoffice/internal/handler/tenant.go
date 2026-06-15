@@ -133,6 +133,9 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 			// Return 202 to indicate local creation succeeded but DC provisioning failed
 			tenant.ProvisioningStatus = model.ProvisioningFailed
 			tenant.InviteResults = failAllInvites(req.Invites, "tenant provisioning failed")
+			// The tenant row WAS created locally — audit it even though the
+			// request returns 202 with failed provisioning.
+			auditTenantCreate(r, h.store, tenant, len(req.Invites), "dc key decrypt failed")
 			writeJSON(w, http.StatusAccepted, tenant)
 			return
 		}
@@ -145,6 +148,7 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			tenant.ProvisioningStatus = model.ProvisioningFailed
 			tenant.InviteResults = failAllInvites(req.Invites, "tenant provisioning failed")
+			auditTenantCreate(r, h.store, tenant, len(req.Invites), "dc provisioning failed")
 			writeJSON(w, http.StatusAccepted, tenant)
 			return
 		}
@@ -162,18 +166,32 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 		tenant.InviteResults = failAllInvites(req.Invites, "tenant not provisioned; invites skipped")
 	}
 
-	audit.Log(r.Context(), h.store, r, audit.Entry{
+	auditTenantCreate(r, h.store, tenant, len(req.Invites), "")
+	writeJSON(w, http.StatusCreated, tenant)
+}
+
+// auditTenantCreate emits the tenant.create event. It's called on every path
+// that persisted a tenant row — the success path and the accepted (202)
+// provisioning-failure branches — so a created tenant always has an audit row.
+// reason="" is the provisioned/normal path; a non-empty reason records the
+// provisioning failure cause.
+func auditTenantCreate(r *http.Request, s store.Store, tenant *model.Tenant, invites int, reason string) {
+	meta := map[string]any{
+		"name":                tenant.Name,
+		"data_center_id":      tenant.DataCenterID,
+		"invites":             invites,
+		"provisioning_status": tenant.ProvisioningStatus,
+	}
+	if reason != "" {
+		meta["reason"] = reason
+	}
+	audit.Log(r.Context(), s, r, audit.Entry{
 		Action:     audit.ActionTenantCreate,
 		TargetType: "tenant",
 		TargetID:   tenant.ID,
 		TenantID:   tenant.ID,
-		Metadata: map[string]any{
-			"name":           tenant.Name,
-			"data_center_id": tenant.DataCenterID,
-			"invites":        len(req.Invites),
-		},
+		Metadata:   meta,
 	})
-	writeJSON(w, http.StatusCreated, tenant)
 }
 
 // sendInvites creates invitation rows for each requested invite and emails
@@ -252,6 +270,13 @@ func (h *TenantHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionTenantUpdate,
+		TargetType: "tenant",
+		TargetID:   id,
+		TenantID:   id,
+		Metadata:   map[string]any{"name": tenant.Name},
+	})
 	writeJSON(w, http.StatusOK, tenant)
 }
 
@@ -420,5 +445,12 @@ func (h *TenantHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 	tenant.ProvisioningStatus = model.ProvisioningProvisioned
 	tenant.DCTenantID = &dcTenant.ID
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionTenantRetry,
+		TargetType: "tenant",
+		TargetID:   id,
+		TenantID:   id,
+		Metadata:   map[string]any{"name": tenant.Name},
+	})
 	writeJSON(w, http.StatusOK, tenant)
 }

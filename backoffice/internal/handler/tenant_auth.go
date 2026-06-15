@@ -533,11 +533,20 @@ func (h *TenantAuthHandler) CreateInvite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	expiry := time.Now().Add(inviteExpiry)
-	if _, err := h.store.CreateInvitation(r.Context(), claims.BoTenantID, req.Email, req.Role, tokenHash, expiry, nil); err != nil {
+	inv, err := h.store.CreateInvitation(r.Context(), claims.BoTenantID, req.Email, req.Role, tokenHash, expiry, nil)
+	if err != nil {
 		slog.Error("creating invitation", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create invitation")
 		return
 	}
+	// Audit here — the invitation persisted regardless of the email outcome.
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionMemberInvite,
+		TargetType: "invitation",
+		TargetID:   inv.ID,
+		TenantID:   claims.BoTenantID,
+		Metadata:   map[string]any{"email": req.Email, "role": req.Role},
+	})
 	inviteURL := h.tenantWebURL + "/accept-invite?token=" + plaintext
 	if err := h.mailer.SendInvite(req.Email, inviteURL, tenant.Name); err != nil {
 		slog.Warn("sending invitation email", "error", err)
@@ -547,12 +556,6 @@ func (h *TenantAuthHandler) CreateInvite(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	audit.Log(r.Context(), h.store, r, audit.Entry{
-		Action:     audit.ActionMemberInvite,
-		TargetType: "invitation",
-		TenantID:   claims.BoTenantID,
-		Metadata:   map[string]any{"email": req.Email, "role": req.Role},
-	})
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "invited"})
 }
 
@@ -588,6 +591,13 @@ func (h *TenantAuthHandler) RemoveMember(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to remove member")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionMemberRemove,
+		TargetType: "membership",
+		TargetID:   userID,
+		TenantID:   claims.BoTenantID,
+		Metadata:   map[string]any{"user_id": userID},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -636,6 +646,12 @@ func (h *TenantAuthHandler) CancelInvitation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to cancel invitation")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionInvitationCancel,
+		TargetType: "invitation",
+		TargetID:   id,
+		TenantID:   claims.BoTenantID,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -686,6 +702,13 @@ func (h *TenantAuthHandler) UpdateMemberStatus(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to update membership status")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionMemberStatus,
+		TargetType: "membership",
+		TargetID:   userID,
+		TenantID:   claims.BoTenantID,
+		Metadata:   map[string]any{"user_id": userID, "status": req.Status},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -739,6 +762,13 @@ func (h *TenantAuthHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionMemberRole,
+		TargetType: "membership",
+		TargetID:   userID,
+		TenantID:   claims.BoTenantID,
+		Metadata:   map[string]any{"user_id": userID, "role": req.Role},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -792,6 +822,15 @@ func (h *TenantAuthHandler) ResendInvitation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to regenerate invitation")
 		return
 	}
+	// The invitation was regenerated here; audit regardless of whether the
+	// follow-up email send succeeds.
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionInvitationResend,
+		TargetType: "invitation",
+		TargetID:   id,
+		TenantID:   claims.BoTenantID,
+		Metadata:   map[string]any{"email": match.Email},
+	})
 	inviteURL := h.tenantWebURL + "/accept-invite?token=" + plaintext
 	if err := h.mailer.SendInvite(match.Email, inviteURL, tenant.Name); err != nil {
 		slog.Warn("resending invitation email", "error", err)

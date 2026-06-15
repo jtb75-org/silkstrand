@@ -130,6 +130,12 @@ func GetTenantClaims(ctx context.Context) *TenantClaims {
 	return v
 }
 
+// SetTenantClaims stores tenant claims in the context (mirrors SetAdminClaims;
+// used by handler tests to simulate an authenticated tenant request).
+func SetTenantClaims(ctx context.Context, claims *TenantClaims) context.Context {
+	return context.WithValue(ctx, tenantClaimsKey, claims)
+}
+
 func writeJSONErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
