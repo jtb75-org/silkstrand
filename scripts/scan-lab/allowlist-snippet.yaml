@@ -1,0 +1,8 @@
+# Add these to the lan-agent scan-allowlist (/etc/silkstrand/scan-allowlist.yaml,
+# or the agent zone/allowlist config). Every recon directive is allowlist-gated,
+# so without these the scan-lab targets are skipped.
+allow:
+  - 192.168.0.230   # postgres-16
+  - 192.168.0.231   # mongodb-8
+  - 192.168.0.232   # mssql-2022
+  # - 192.168.0.233-236  # network tier (follow-up)

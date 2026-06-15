@@ -1,0 +1,35 @@
+# MongoDB 8 — stock image with NO auth (no MONGO_INITDB_ROOT_USERNAME) and bound
+# to all interfaces = fails CIS MongoDB-8 auth/TLS controls. No credentials needed
+# (unauthenticated) — the bundle/probe connects without auth, which is the finding.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-8
+  namespace: scan-lab
+  labels: { app: mongodb-8 }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mongodb-8 } }
+  template:
+    metadata:
+      labels: { app: mongodb-8 }
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:8
+          # default entrypoint binds 0.0.0.0 with --auth OFF (no root env set)
+          ports:
+            - { containerPort: 27017 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-8
+  namespace: scan-lab
+  annotations:
+    kube-vip.io/loadbalancerIPs: "192.168.0.231"
+spec:
+  type: LoadBalancer
+  selector: { app: mongodb-8 }
+  ports:
+    - { name: mongodb, port: 27017, targetPort: 27017 }

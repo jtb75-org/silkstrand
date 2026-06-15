@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scan-lab
+  labels:
+    app.kubernetes.io/part-of: scan-lab
+    silkstrand.io/purpose: deliberate-scan-targets
+---
+# Containment: deny all egress from scan-lab pods (these are deliberately
+# insecure — they must not be able to pivot/phone-home), except DNS so the
+# images start cleanly. Ingress is left open so the LAN agent can scan the
+# exposed ports via the kube-vip LoadBalancer IPs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scan-lab-contain
+  namespace: scan-lab
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
