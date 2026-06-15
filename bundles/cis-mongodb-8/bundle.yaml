@@ -3,6 +3,7 @@ name: CIS MongoDB 8 Benchmark
 version: 2.0.4
 framework: cis-mongodb-8
 engine: mongodb
+vendor_dir: content/vendor
 controls:
   - mongo-auth-configured
   - mongo-localhost-auth-bypass

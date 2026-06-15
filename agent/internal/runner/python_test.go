@@ -126,6 +126,7 @@ name: CIS PostgreSQL 16
 version: 2.0.4
 framework: cis-postgresql-16
 engine: postgresql
+vendor_dir: content/vendor
 controls:
   - pg-tls-enabled
   - pg-log-connections
@@ -146,6 +147,9 @@ controls:
 	}
 	if m.Engine != "postgresql" {
 		t.Errorf("Engine = %q, want %q", m.Engine, "postgresql")
+	}
+	if m.VendorDir != "content/vendor" {
+		t.Errorf("VendorDir = %q, want %q", m.VendorDir, "content/vendor")
 	}
 	if len(m.Controls) != 2 {
 		t.Fatalf("Controls len = %d, want 2", len(m.Controls))
@@ -219,4 +223,45 @@ func TestRunControl(t *testing.T) {
 
 func writeTestFile(dir, name string, data []byte) error {
 	return os.WriteFile(filepath.Join(dir, name), data, 0o644)
+}
+
+func TestVendorPythonPath(t *testing.T) {
+	bundle := "/bundles/cis-postgresql-16/2.0.4"
+	vendorPath := filepath.Join(bundle, "content/vendor")
+	sep := string(os.PathListSeparator)
+
+	tests := []struct {
+		name      string
+		vendorDir string
+		existing  string
+		want      string
+	}{
+		{
+			name:      "vendor dir, no existing PYTHONPATH",
+			vendorDir: "content/vendor",
+			existing:  "",
+			want:      "PYTHONPATH=" + vendorPath,
+		},
+		{
+			name:      "vendor dir prepended to existing PYTHONPATH",
+			vendorDir: "content/vendor",
+			existing:  "/opt/extra",
+			want:      "PYTHONPATH=" + vendorPath + sep + "/opt/extra",
+		},
+		{
+			name:      "no vendor dir -> no PYTHONPATH override",
+			vendorDir: "",
+			existing:  "/opt/extra",
+			want:      "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vendorPythonPath(bundle, tc.vendorDir, tc.existing); got != tc.want {
+				t.Errorf("vendorPythonPath(%q, %q, %q) = %q, want %q",
+					bundle, tc.vendorDir, tc.existing, got, tc.want)
+			}
+		})
+	}
 }

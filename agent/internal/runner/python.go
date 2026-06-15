@@ -55,14 +55,8 @@ func (r *PythonRunner) Run(ctx context.Context, req RunRequest) (json.RawMessage
 	// If the manifest declares a vendor directory, prepend it to PYTHONPATH so
 	// the bundle's pure-Python dependencies are importable without touching
 	// system site-packages.
-	if req.Manifest.VendorDir != "" {
-		vendorPath := filepath.Join(bundlePath, req.Manifest.VendorDir)
-		existing := os.Getenv("PYTHONPATH")
-		if existing != "" {
-			env = append(env, "PYTHONPATH="+vendorPath+string(os.PathListSeparator)+existing)
-		} else {
-			env = append(env, "PYTHONPATH="+vendorPath)
-		}
+	if p := vendorPythonPath(bundlePath, req.Manifest.VendorDir, os.Getenv("PYTHONPATH")); p != "" {
+		env = append(env, p)
 	}
 
 	// Pass credentials if provided. On Unix we hand the bundle a pipe via
@@ -151,14 +145,8 @@ func (r *PythonRunner) RunControl(ctx context.Context, req ControlRunRequest) (j
 	env := os.Environ()
 	env = append(env, "SILKSTRAND_TARGET_CONFIG="+targetConfigPath)
 
-	if req.VendorDir != "" {
-		vendorPath := filepath.Join(bundlePath, req.VendorDir)
-		existing := os.Getenv("PYTHONPATH")
-		if existing != "" {
-			env = append(env, "PYTHONPATH="+vendorPath+string(os.PathListSeparator)+existing)
-		} else {
-			env = append(env, "PYTHONPATH="+vendorPath)
-		}
+	if p := vendorPythonPath(bundlePath, req.VendorDir, os.Getenv("PYTHONPATH")); p != "" {
+		env = append(env, p)
 	}
 
 	if len(req.Credentials) > 0 && string(req.Credentials) != "null" {
@@ -206,4 +194,20 @@ func (r *PythonRunner) RunControl(ctx context.Context, req ControlRunRequest) (j
 	}
 
 	return json.RawMessage(output), nil
+}
+
+// vendorPythonPath builds the PYTHONPATH env entry that prepends a bundle's
+// vendored dependencies (bundlePath/vendorDir) ahead of any existing PYTHONPATH,
+// so a control's pure-Python deps import without touching system site-packages.
+// Returns "" when vendorDir is empty (no PYTHONPATH override). Shared by the
+// whole-bundle and per-control runners.
+func vendorPythonPath(bundlePath, vendorDir, existing string) string {
+	if vendorDir == "" {
+		return ""
+	}
+	vendorPath := filepath.Join(bundlePath, vendorDir)
+	if existing != "" {
+		return "PYTHONPATH=" + vendorPath + string(os.PathListSeparator) + existing
+	}
+	return "PYTHONPATH=" + vendorPath
 }

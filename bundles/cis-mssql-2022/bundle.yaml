@@ -3,6 +3,7 @@ name: CIS Microsoft SQL Server 2022 Benchmark
 version: 2.0.4
 framework: cis-mssql-2022
 engine: mssql
+vendor_dir: content/vendor
 controls:
   - mssql-ad-hoc-distributed-queries
   - mssql-clr-enabled

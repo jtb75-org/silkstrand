@@ -38,6 +38,10 @@ type BundleManifest struct {
 	Framework string   `yaml:"framework"`
 	Engine    string   `yaml:"engine"`
 	Controls  []string `yaml:"controls"`
+	// VendorDir is the bundle-relative path to vendored Python deps, prepended to
+	// PYTHONPATH for each control (e.g. "content/vendor"). Empty → the runner
+	// falls back to content/vendor when that directory exists.
+	VendorDir string `yaml:"vendor_dir"`
 }
 
 // LoadManifest reads and parses the manifest.yaml from the given bundle path.
