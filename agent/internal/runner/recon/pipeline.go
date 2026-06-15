@@ -129,7 +129,7 @@ func Run(ctx context.Context, req PipelineRequest) (*PipelineResult, error) {
 		defer naabuMu.Unlock()
 		return []any{"scan_id", req.ScanID, "open_ports", len(findings), "hosts", len(hostsSeen)}
 	})
-	naabuErr := runNaabu(ctx, req.TargetIdentifier, pps, naabuOnFinding)
+	naabuErr := runNaabu(ctx, req.TargetIdentifier, cfg.Ports, pps, naabuOnFinding)
 	stopNaabuProgress()
 	if naabuErr != nil {
 		naabuBatcher.Flush()
