@@ -159,6 +159,7 @@ export default function Findings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['findings'] });
       queryClient.invalidateQueries({ queryKey: ['finding'] }); // refresh an open drawer
+      queryClient.invalidateQueries({ queryKey: ['findings-severity-summary'] }); // refresh the chips
     },
   });
 
@@ -167,6 +168,7 @@ export default function Findings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['findings'] });
       queryClient.invalidateQueries({ queryKey: ['finding'] });
+      queryClient.invalidateQueries({ queryKey: ['findings-severity-summary'] });
     },
   });
 
@@ -189,6 +191,7 @@ export default function Findings() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['findings'] });
       queryClient.invalidateQueries({ queryKey: ['finding'] });
+      queryClient.invalidateQueries({ queryKey: ['findings-severity-summary'] }); // chips reflect partial success too
     },
   });
 
