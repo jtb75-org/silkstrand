@@ -105,6 +105,16 @@ jobs:
           # a shell content-type.
           mc cp --attr "Cache-Control=no-cache,max-age=0;Content-Type=text/x-shellscript" \
             scripts/install-agent.sh "silkstrand/${AGENT_RELEASES_BUCKET}/install.sh"
+          # latest/VERSION — the concrete latest RELEASE TAG the API returns as
+          # downloads.version. Keep the v-prefixed tag (matches the versioned
+          # folder {bucket}/v0.1.52/ and the container image :v0.1.52) so the
+          # installer/recreate --version resolves (install-agent.sh uses it for
+          # both the binary folder and the image tag). The frontend strips a
+          # single leading "v" on both sides for the update-available comparison,
+          # since binary agents report main.version without the v and container
+          # agents with it. no-cache like the rest of latest/.
+          printf '%s' "$VERSION" | mc pipe --attr "Cache-Control=no-cache,max-age=0" \
+            "silkstrand/${AGENT_RELEASES_BUCKET}/latest/VERSION"
 
       - name: Attach to release
         uses: softprops/action-gh-release@v3

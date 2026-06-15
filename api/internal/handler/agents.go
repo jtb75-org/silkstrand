@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jtb75/silkstrand/api/internal/allowlist"
@@ -35,10 +37,84 @@ type AgentsHandler struct {
 	bus         events.Bus
 	audit       audit.Writer
 	releasesURL string // base URL for agent binaries/installer, e.g. GCS bucket
+
+	// Cached latest agent version, fetched from {releasesURL}/latest/VERSION so
+	// Downloads can report a concrete version instead of the "latest" string.
+	httpClient *http.Client
+	verMu      sync.Mutex
+	verValue   string
+	verExpires time.Time
 }
 
 func NewAgentsHandler(s store.Store, hub *websocket.Hub, ps *pubsub.PubSub, bus events.Bus, aw audit.Writer, releasesURL string) *AgentsHandler {
-	return &AgentsHandler{store: s, hub: hub, ps: ps, bus: bus, audit: aw, releasesURL: releasesURL}
+	return &AgentsHandler{
+		store: s, hub: hub, ps: ps, bus: bus, audit: aw, releasesURL: releasesURL,
+		httpClient: &http.Client{Timeout: 2 * time.Second},
+	}
+}
+
+const (
+	agentVersionCacheTTL = 5 * time.Minute
+	agentVersionFailTTL  = 1 * time.Minute
+)
+
+// Semver-ish guard for the published VERSION manifest: an optional leading "v"
+// (the release tag is v-prefixed), then a digit and version-safe chars only.
+// Rejects junk / HTML error pages.
+var agentVersionRe = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+-]{0,63}$`)
+
+// fetchAgentVersion GETs {base}/latest/VERSION and returns the trimmed, validated
+// version string. Bounded by the caller's http.Client timeout and a tiny body
+// limit so it never blocks or trusts a large/garbage response.
+func fetchAgentVersion(ctx context.Context, client *http.Client, base string) (string, error) {
+	url := strings.TrimRight(base, "/") + "/latest/VERSION"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("version manifest: status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimSpace(string(body))
+	if !agentVersionRe.MatchString(v) {
+		return "", fmt.Errorf("version manifest: invalid value %q", v)
+	}
+	return v, nil
+}
+
+// latestAgentVersion returns the concrete latest agent version (cached briefly).
+// On any error it returns "latest" — the prior hardcoded behavior — so the
+// Downloads response degrades safely and the UI shows no false "update available".
+func (h *AgentsHandler) latestAgentVersion(ctx context.Context, base string) string {
+	h.verMu.Lock()
+	if h.verValue != "" && time.Now().Before(h.verExpires) {
+		v := h.verValue
+		h.verMu.Unlock()
+		return v
+	}
+	h.verMu.Unlock()
+
+	v, err := fetchAgentVersion(ctx, h.httpClient, base)
+	ttl := agentVersionCacheTTL
+	if err != nil {
+		slog.Debug("agent latest-version fetch failed; falling back to \"latest\"", "error", err)
+		v = "latest"
+		ttl = agentVersionFailTTL
+	}
+	h.verMu.Lock()
+	h.verValue = v
+	h.verExpires = time.Now().Add(ttl)
+	h.verMu.Unlock()
+	return v
 }
 
 // GET /api/v1/agents
@@ -260,7 +336,7 @@ func (h *AgentsHandler) Downloads(w http.ResponseWriter, r *http.Request) {
 		base = "https://downloads.silkstrand.io/agent"
 	}
 	info := DownloadInfo{
-		Version:       "latest",
+		Version:       h.latestAgentVersion(r.Context(), base),
 		InstallScript: base + "/install.sh",
 		InstallCmd:    "curl -sSL " + base + "/install.sh | sh",
 		Binaries: map[string]string{

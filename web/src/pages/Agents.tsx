@@ -15,6 +15,7 @@ import CodeBlock from '../components/CodeBlock';
 import DataTable from '../components/DataTable';
 import EmptyState from '../components/EmptyState';
 import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+import { isUpdateAvailable } from '../lib/agentVersion';
 
 // Status → label + color for the summary chips. connected/online are healthy,
 // disconnected/offline are down, pending is in-between. (model has no "stale".)
@@ -251,7 +252,32 @@ export default function Agents() {
       id: 'version',
       header: 'Version',
       accessorFn: (a) => a.version ?? '',
-      cell: ({ row }) => row.original.version ?? '—',
+      cell: ({ row }) => {
+        const a = row.original;
+        const latest = downloads?.version;
+        // isUpdateAvailable normalizes the leading "v" on both sides (binary
+        // agents report no-v, container agents v-prefixed, the tag is v-prefixed)
+        // and applies the connected / real-version / not-"latest" guards.
+        const updateAvailable = isUpdateAvailable(a.version, latest, a.status);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+            {a.version ?? '—'}
+            {updateAvailable && (
+              <button
+                className="badge"
+                title={`Update available: ${latest}. Click to upgrade.`}
+                style={{
+                  background: 'var(--ss-warning)', color: 'var(--ss-text-on-accent)',
+                  border: 'none', cursor: 'pointer',
+                }}
+                onClick={(e) => { e.stopPropagation(); triggerUpgrade(a); }}
+              >
+                update available
+              </button>
+            )}
+          </span>
+        );
+      },
     },
     {
       id: 'last_heartbeat',
