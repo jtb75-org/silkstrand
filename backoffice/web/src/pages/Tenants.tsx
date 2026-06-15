@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Building2, Ban, CheckCircle2, RefreshCw, Trash2 } from 'lucide-react';
 import {
   listTenants,
   listDataCenters,
@@ -19,6 +21,9 @@ import type {
 } from '../api/types';
 import { worldRegionForGCP, WORLD_REGIONS, type WorldRegion } from '../lib/regions';
 import StatusBadge from '../components/StatusBadge';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
+import Menu from '../components/Menu';
 
 type EnvFilter = DCEnvironment | 'all';
 type RegionFilter = WorldRegion | 'all';
@@ -136,6 +141,71 @@ export default function Tenants() {
     const newStatus = tenant.status === 'active' ? 'suspended' : 'active';
     statusMutation.mutate({ id: tenant.id, status: newStatus });
   }
+
+  const columns: ColumnDef<Tenant>[] = [
+    { accessorKey: 'name', header: 'Name' },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: 'provisioning_status',
+      header: 'Provisioning',
+      cell: ({ row }) => <StatusBadge status={row.original.provisioning_status} />,
+    },
+    {
+      accessorKey: 'dc_tenant_id',
+      header: 'DC Tenant ID',
+      cell: ({ row }) => <span className="text-muted">{row.original.dc_tenant_id || '-'}</span>,
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => new Date(row.original.created_at).toLocaleString(),
+    },
+    {
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const t = row.original;
+        const active = t.status === 'active';
+        const items = [
+          {
+            key: 'status',
+            label: active ? 'Suspend' : 'Activate',
+            icon: active ? <Ban size={14} /> : <CheckCircle2 size={14} />,
+            disabled: statusMutation.isPending,
+            onSelect: () => handleToggleStatus(t),
+          },
+          ...(t.provisioning_status === 'failed'
+            ? [
+                {
+                  key: 'retry',
+                  label: 'Retry provisioning',
+                  icon: <RefreshCw size={14} />,
+                  disabled: retryMutation.isPending,
+                  onSelect: () => retryMutation.mutate(t.id),
+                },
+              ]
+            : []),
+          {
+            key: 'delete',
+            label: 'Delete',
+            icon: <Trash2 size={14} />,
+            destructive: true,
+            onSelect: () => { setDeleteTarget(t); setDeleteConfirmText(''); },
+          },
+        ];
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <Menu ariaLabel={`Actions for ${t.name}`} items={items} />
+          </div>
+        );
+      },
+    },
+  ];
 
   return (
     <div>
@@ -312,73 +382,19 @@ export default function Tenants() {
         </div>
       )}
 
-      {!showForm && isLoading && <p>Loading...</p>}
+      {!showForm && isLoading && <p className="text-muted">Loading…</p>}
       {!showForm && error && <p className="error">Failed to load tenants: {(error as Error).message}</p>}
-      {!showForm && !isLoading && tenants && tenants.length === 0 && <p>No tenants found.</p>}
+      {!showForm && !isLoading && tenants && tenants.length === 0 && (
+        <EmptyState icon={<Building2 />} title="No tenants found." />
+      )}
       {!showForm && tenants && tenants.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Provisioning</th>
-              <th>DC Tenant ID</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {tenants.map((t) => (
-              <tr
-                key={t.id}
-                className="clickable-row"
-                onClick={() => navigate(`/tenants/${t.id}`)}
-              >
-                <td>{t.name}</td>
-                <td><StatusBadge status={t.status} /></td>
-                <td><StatusBadge status={t.provisioning_status} /></td>
-                <td className="text-muted">{t.dc_tenant_id || '-'}</td>
-                <td>{new Date(t.created_at).toLocaleString()}</td>
-                <td>
-                  <button
-                    className="btn btn-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleStatus(t);
-                    }}
-                    disabled={statusMutation.isPending}
-                  >
-                    {t.status === 'active' ? 'Suspend' : 'Activate'}
-                  </button>
-                  {t.provisioning_status === 'failed' && (
-                    <button
-                      className="btn btn-primary btn-sm"
-                      style={{ marginLeft: 6 }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        retryMutation.mutate(t.id);
-                      }}
-                      disabled={retryMutation.isPending}
-                    >
-                      Retry
-                    </button>
-                  )}
-                  <button
-                    className="btn btn-danger btn-sm"
-                    style={{ marginLeft: 6 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeleteTarget(t);
-                      setDeleteConfirmText('');
-                    }}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<Tenant>
+          columns={columns}
+          data={tenants}
+          getRowId={(t) => t.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+          onRowClick={(t) => navigate(`/tenants/${t.id}`)}
+        />
       )}
 
       {deleteTarget && (
