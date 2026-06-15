@@ -17,6 +17,7 @@ func TestFetchAgentVersion(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "valid version trimmed", status: 200, body: "0.1.52\n", want: "0.1.52"},
+		{name: "valid v-prefixed release tag", status: 200, body: "v0.1.52\n", want: "v0.1.52"},
 		{name: "valid with build metadata", status: 200, body: "1.2.3-rc.1+abc ", want: "1.2.3-rc.1+abc"},
 		{name: "empty body is error", status: 200, body: "   \n", wantErr: true},
 		{name: "junk/html is rejected", status: 200, body: "<html>nope</html>", wantErr: true},

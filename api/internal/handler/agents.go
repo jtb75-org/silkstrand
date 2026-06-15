@@ -58,9 +58,10 @@ const (
 	agentVersionFailTTL  = 1 * time.Minute
 )
 
-// Semver-ish guard for the published VERSION manifest: starts with a digit,
-// then version-safe chars only. Rejects junk / HTML error pages.
-var agentVersionRe = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]{0,63}$`)
+// Semver-ish guard for the published VERSION manifest: an optional leading "v"
+// (the release tag is v-prefixed), then a digit and version-safe chars only.
+// Rejects junk / HTML error pages.
+var agentVersionRe = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+-]{0,63}$`)
 
 // fetchAgentVersion GETs {base}/latest/VERSION and returns the trimmed, validated
 // version string. Bounded by the caller's http.Client timeout and a tiny body

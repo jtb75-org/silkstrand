@@ -15,6 +15,7 @@ import CodeBlock from '../components/CodeBlock';
 import DataTable from '../components/DataTable';
 import EmptyState from '../components/EmptyState';
 import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+import { isUpdateAvailable } from '../lib/agentVersion';
 
 // Status → label + color for the summary chips. connected/online are healthy,
 // disconnected/offline are down, pending is in-between. (model has no "stale".)
@@ -254,15 +255,10 @@ export default function Agents() {
       cell: ({ row }) => {
         const a = row.original;
         const latest = downloads?.version;
-        // Only hint when we have a REAL latest version (not the "latest"
-        // fallback), the agent reports real semver (not "dev"/unset), they
-        // differ, and the agent is connected (can self-upgrade). Avoids false
-        // positives.
-        const updateAvailable =
-          a.status === 'connected' &&
-          !!a.version && a.version !== 'dev' &&
-          !!latest && latest !== 'latest' &&
-          a.version !== latest;
+        // isUpdateAvailable normalizes the leading "v" on both sides (binary
+        // agents report no-v, container agents v-prefixed, the tag is v-prefixed)
+        // and applies the connected / real-version / not-"latest" guards.
+        const updateAvailable = isUpdateAvailable(a.version, latest, a.status);
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
             {a.version ?? '—'}
