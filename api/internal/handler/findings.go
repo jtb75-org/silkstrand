@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -24,9 +25,30 @@ func NewFindingsHandler(s store.Store) *FindingsHandler {
 }
 
 func (h *FindingsHandler) List(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+	f := findingFilterFromQuery(r.URL.Query())
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	items, err := h.store.ListFindings(r.Context(), f)
+	if err != nil {
+		slog.Error("listing findings", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list findings")
+		return
+	}
+	if items == nil {
+		items = []model.Finding{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// findingFilterFromQuery parses the shared findings filter (used by both List and
+// SeveritySummary). source_kind is read as a multi-value param so the compliance
+// tab's two kinds are OR-matched, not just the first.
+func findingFilterFromQuery(q url.Values) store.FindingFilter {
 	f := store.FindingFilter{
-		SourceKind:      q.Get("source_kind"),
+		SourceKinds:     q["source_kind"],
 		Source:          q.Get("source"),
 		Severity:        q.Get("severity"),
 		Status:          q.Get("status"),
@@ -44,21 +66,37 @@ func (h *FindingsHandler) List(w http.ResponseWriter, r *http.Request) {
 			f.Until = &t
 		}
 	}
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			f.Limit = n
-		}
-	}
-	items, err := h.store.ListFindings(r.Context(), f)
+	return f
+}
+
+type severitySummaryResponse struct {
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
+	Info     int `json:"info"`
+}
+
+// GET /api/v1/findings/severity-summary
+// Filter-aware open-finding counts per severity over the FULL filtered set
+// (honors tab source-kinds / status / collection / date — NOT severity), so the
+// Findings page chips reflect every match, not just the 200-row list page.
+func (h *FindingsHandler) SeveritySummary(w http.ResponseWriter, r *http.Request) {
+	f := findingFilterFromQuery(r.URL.Query())
+	f.Severity = "" // the chips ARE the per-severity breakdown
+	counts, err := h.store.FindingsSeveritySummary(r.Context(), f)
 	if err != nil {
-		slog.Error("listing findings", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list findings")
+		slog.Error("findings severity summary", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to compute severity summary")
 		return
 	}
-	if items == nil {
-		items = []model.Finding{}
-	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, severitySummaryResponse{
+		Critical: counts["critical"],
+		High:     counts["high"],
+		Medium:   counts["medium"],
+		Low:      counts["low"],
+		Info:     counts["info"],
+	})
 }
 
 func (h *FindingsHandler) Get(w http.ResponseWriter, r *http.Request) {

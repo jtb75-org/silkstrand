@@ -2863,15 +2863,21 @@ func (s *PostgresStore) UpsertFinding(ctx context.Context, in UpsertFindingInput
 	return &out, nil
 }
 
-func (s *PostgresStore) ListFindings(ctx context.Context, f FindingFilter) ([]model.Finding, error) {
-	tenantID := TenantID(ctx)
+// buildFindingWhereBase builds the tenant + simple-filter WHERE clause and its
+// args (everything except collection membership, which needs a DB lookup). Pure
+// — shared by ListFindings and FindingsSeveritySummary so both honor identical
+// filters. SourceKinds (OR-match) takes precedence over the single SourceKind.
+func buildFindingWhereBase(tenantID string, f FindingFilter) (string, []any) {
 	args := []any{tenantID}
 	where := `tenant_id = $1`
 	add := func(clause string, v any) {
 		args = append(args, v)
 		where += fmt.Sprintf(" AND %s = $%d", clause, len(args))
 	}
-	if f.SourceKind != "" {
+	if len(f.SourceKinds) > 0 {
+		args = append(args, f.SourceKinds)
+		where += fmt.Sprintf(" AND source_kind = ANY($%d::text[])", len(args))
+	} else if f.SourceKind != "" {
 		add("source_kind", f.SourceKind)
 	}
 	if f.Source != "" {
@@ -2897,6 +2903,11 @@ func (s *PostgresStore) ListFindings(ctx context.Context, f FindingFilter) ([]mo
 		args = append(args, *f.Until)
 		where += fmt.Sprintf(" AND last_seen <= $%d", len(args))
 	}
+	return where, args
+}
+
+func (s *PostgresStore) ListFindings(ctx context.Context, f FindingFilter) ([]model.Finding, error) {
+	where, args := buildFindingWhereBase(TenantID(ctx), f)
 	if f.CollectionID != "" {
 		ids, err := s.CollectionEndpointIDs(ctx, f.CollectionID)
 		if err != nil {
@@ -2926,6 +2937,42 @@ func (s *PostgresStore) ListFindings(ctx context.Context, f FindingFilter) ([]mo
 			return nil, fmt.Errorf("scanning finding: %w", err)
 		}
 		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// FindingsSeveritySummary returns open-finding counts per severity over the FULL
+// filtered set (not the list's 200-row cap), honoring the same filters as
+// ListFindings EXCEPT severity — the per-severity counts ARE the breakdown.
+// One grouped, tenant-scoped query.
+func (s *PostgresStore) FindingsSeveritySummary(ctx context.Context, f FindingFilter) (map[string]int, error) {
+	f.Severity = "" // the chips are the per-severity breakdown — never filter by it
+	where, args := buildFindingWhereBase(TenantID(ctx), f)
+	out := map[string]int{}
+	if f.CollectionID != "" {
+		ids, err := s.CollectionEndpointIDs(ctx, f.CollectionID)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return out, nil
+		}
+		args = append(args, ids)
+		where += fmt.Sprintf(" AND asset_endpoint_id = ANY($%d::uuid[])", len(args))
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT COALESCE(severity, 'info'), COUNT(*) FROM findings WHERE `+where+` GROUP BY severity`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("findings severity summary: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sev string
+		var n int
+		if err := rows.Scan(&sev, &n); err != nil {
+			return nil, err
+		}
+		out[sev] = n
 	}
 	return out, rows.Err()
 }

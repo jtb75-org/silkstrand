@@ -753,6 +753,22 @@ export const listFindings = (params: FindingFilterParams = {}) => {
 export const getFinding = (id: string) =>
   request<Finding>(`/api/v1/findings/${id}`);
 
+export interface FindingsSeveritySummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+}
+
+// Filter-aware open-finding counts per severity over the FULL filtered set
+// (server-side; honors the same filters as the list except severity). Pass the
+// list filters WITHOUT severity.
+export const getFindingsSeveritySummary = (params: FindingFilterParams = {}) => {
+  const qs = buildFindingQuery(params);
+  return request<FindingsSeveritySummary>(`/api/v1/findings/severity-summary${qs ? `?${qs}` : ''}`);
+};
+
 export const suppressFinding = (id: string) =>
   request<Finding>(`/api/v1/findings/${id}/suppress`, { method: 'POST' });
 

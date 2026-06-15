@@ -259,6 +259,7 @@ func run() error {
 
 	// Findings (ADR 007 D1) — 501 stubs (P3).
 	apiMux.HandleFunc("GET /api/v1/findings", findingsH.List)
+	apiMux.HandleFunc("GET /api/v1/findings/severity-summary", findingsH.SeveritySummary)
 	apiMux.HandleFunc("GET /api/v1/findings/{id}", findingsH.Get)
 	apiMux.HandleFunc("POST /api/v1/findings/{id}/suppress", findingsH.Suppress)
 	apiMux.HandleFunc("POST /api/v1/findings/{id}/reopen", findingsH.Reopen)
