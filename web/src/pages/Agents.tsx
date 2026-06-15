@@ -14,6 +14,18 @@ import AddAgentModal from '../components/AddAgentModal';
 import CodeBlock from '../components/CodeBlock';
 import DataTable from '../components/DataTable';
 import EmptyState from '../components/EmptyState';
+import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+
+// Status → label + color for the summary chips. connected/online are healthy,
+// disconnected/offline are down, pending is in-between. (model has no "stale".)
+const AGENT_STATUS_META: Record<string, { label: string; color: string }> = {
+  connected: { label: 'Connected', color: 'var(--ss-success)' },
+  online: { label: 'Online', color: 'var(--ss-success)' },
+  pending: { label: 'Pending', color: 'var(--ss-warning)' },
+  disconnected: { label: 'Disconnected', color: 'var(--ss-danger)' },
+  offline: { label: 'Offline', color: 'var(--ss-danger)' },
+};
+const AGENT_STATUS_ORDER = ['connected', 'online', 'pending', 'disconnected', 'offline'];
 
 export default function Agents() {
   const qc = useQueryClient();
@@ -53,7 +65,32 @@ export default function Agents() {
   const installScriptURL = downloads?.install_script ?? '';
 
   const [showAdd, setShowAdd] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
   const [newKey, setNewKey] = useState<{ agent: Agent; apiKey: string } | null>(null);
+
+  // Status counts (client-side, over the full list — agents aren't paginated).
+  const statusCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const a of agents ?? []) m[a.status] = (m[a.status] ?? 0) + 1;
+    return m;
+  }, [agents]);
+
+  const statusSegments: SummarySegment[] = useMemo(() => {
+    const known = AGENT_STATUS_ORDER.filter((s) => statusCounts[s]);
+    const extra = Object.keys(statusCounts).filter((s) => !AGENT_STATUS_ORDER.includes(s));
+    return [...known, ...extra].map((s) => ({
+      key: s,
+      label: AGENT_STATUS_META[s]?.label ?? s,
+      count: statusCounts[s],
+      color: AGENT_STATUS_META[s]?.color ?? 'var(--ss-text-muted)',
+      onClick: () => setStatusFilter((prev) => (prev === s ? '' : s)),
+    }));
+  }, [statusCounts]);
+
+  const filteredAgents = useMemo(
+    () => (statusFilter ? (agents ?? []).filter((a) => a.status === statusFilter) : agents ?? []),
+    [agents, statusFilter],
+  );
   const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
   const [consoleFor, setConsoleFor] = useState<Agent | null>(null);
   // Container agents can't self-upgrade in place — the action recreates the
@@ -274,9 +311,32 @@ export default function Agents() {
       )}
 
       {agents && agents.length > 0 && (
+        <div style={{ marginBottom: 'var(--ss-space-md)' }}>
+          <SummaryChips variant="chips" segments={statusSegments} emptyText="No agents." />
+          {statusFilter && (
+            <span className="muted" style={{ marginLeft: 'var(--ss-space-md)', fontSize: 'var(--ss-text-body-sm)' }}>
+              Filtered: {AGENT_STATUS_META[statusFilter]?.label ?? statusFilter}
+              {' · '}
+              <button
+                className="btn btn-sm"
+                style={{ padding: '0 var(--ss-space-xs)' }}
+                onClick={() => setStatusFilter('')}
+              >
+                clear
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {agents && agents.length > 0 && filteredAgents.length === 0 && (
+        <p className="muted">No agents with that status.</p>
+      )}
+
+      {filteredAgents.length > 0 && (
         <DataTable
           columns={columns}
-          data={agents}
+          data={filteredAgents}
           getRowId={(a) => a.id}
           initialSorting={[{ id: 'name', desc: false }]}
         />
