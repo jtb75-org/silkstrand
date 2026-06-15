@@ -8,7 +8,7 @@ SilkStrand's scan pipeline end-to-end and as a regression harness:
 - **Network vuln pass** (ADR 019 P2 — *default-OFF until v0.1.109 + flag*; targets are ready for when it's on)
 
 > ⚠️ These are **deliberately insecure** workloads. They are LAN/cluster-only,
-> network-isolated (see `01-networkpolicy.yaml`), and meant to be **ephemeral** —
+> network-isolated (NetworkPolicy in `00-namespace.yaml`), and meant to be **ephemeral** —
 > `apply.sh` to spin up for a test run, `teardown.sh` after. Never expose to the internet.
 
 ## How targets are reachable (kube-vip LoadBalancer)

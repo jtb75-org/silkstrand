@@ -22,7 +22,9 @@ spec:
             - { name: POSTGRES_DB, value: "scanlab" }
           ports:
             - { containerPort: 5432 }
-          # pg_hba 'trust' for the whole subnet — deliberately weak (host auth).
+          # Listen on all interfaces so the LB-exposed port is reachable. The
+          # deliberate weakness here is LAN exposure + stock/default config
+          # (no TLS, default logging/audit) — not passwordless trust.
           args: ["postgres", "-c", "listen_addresses=*"]
 ---
 apiVersion: v1
