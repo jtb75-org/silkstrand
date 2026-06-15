@@ -818,6 +818,19 @@ export const getSuggestedActions = () =>
 export const getRecentActivity = () =>
   request<{ items: RecentActivityItem[] }>('/api/v1/dashboard/recent-activity');
 
+export interface CoverageByCollectionRow {
+  collection_id: string;
+  name: string;
+  matched_endpoints: number;
+  covered_endpoints: number;
+  coverage_percent: number;
+}
+
+export const getCoverageByCollection = () =>
+  request<{ items: CoverageByCollectionRow[]; truncated: boolean }>(
+    '/api/v1/dashboard/coverage-by-collection',
+  );
+
 // ──────────────────────────────────────────────────────────────────────
 // ADR 008 PR E — events stream token mint.
 // `POST /api/v1/events/stream-tokens` accepts an optional filter that

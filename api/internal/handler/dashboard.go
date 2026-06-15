@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
+	"github.com/jtb75/silkstrand/api/internal/model"
+	"github.com/jtb75/silkstrand/api/internal/rules"
 	"github.com/jtb75/silkstrand/api/internal/store"
 )
 
@@ -22,7 +25,8 @@ import (
 // Critical Findings KPI falls back to 0 when the findings table is
 // empty, which matches the post-migration-017 state.
 type DashboardHandler struct {
-	db *sql.DB
+	db    *sql.DB
+	store store.Store // for predicate evaluation (coverage-by-collection)
 }
 
 // NewDashboardHandler accepts either a *store.PostgresStore or nil. nil
@@ -32,6 +36,7 @@ func NewDashboardHandler(s any) *DashboardHandler {
 	h := &DashboardHandler{}
 	if ps, ok := s.(*store.PostgresStore); ok && ps != nil {
 		h.db = ps.DB()
+		h.store = ps
 	}
 	return h
 }
@@ -171,6 +176,135 @@ func (h *DashboardHandler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 	).Scan(&resp.Deltas.FindingsNewToday)
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// ---- Coverage by collection ---------------------------------------
+
+type coverageRow struct {
+	CollectionID     string `json:"collection_id"`
+	Name             string `json:"name"`
+	MatchedEndpoints int    `json:"matched_endpoints"`
+	CoveredEndpoints int    `json:"covered_endpoints"`
+	CoveragePercent  int    `json:"coverage_percent"`
+}
+
+type coverageByCollectionResponse struct {
+	Items     []coverageRow `json:"items"`
+	Truncated bool          `json:"truncated"`
+}
+
+// coverageByCollectionLimit caps the strip to the worst-covered collections so
+// the Dashboard stays bounded; truncation is reported, never silent.
+const coverageByCollectionLimit = 20
+
+// GET /api/v1/dashboard/coverage-by-collection
+func (h *DashboardHandler) GetCoverageByCollection(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil || h.store == nil {
+		writeError(w, http.StatusServiceUnavailable, "dashboard store not initialised")
+		return
+	}
+	ctx := r.Context()
+	tenantID := store.TenantID(ctx)
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "tenant not resolved")
+		return
+	}
+
+	// Covered endpoint ids — the SAME rule as the global coverage KPI: an
+	// endpoint is covered iff an enabled scan_definition targets it directly.
+	covered := map[string]bool{}
+	rows, err := h.db.QueryContext(ctx,
+		`SELECT DISTINCT ae.id
+		   FROM asset_endpoints ae
+		   JOIN assets a ON a.id = ae.asset_id
+		   JOIN scan_definitions sd
+		     ON sd.scope_kind = 'asset_endpoint' AND sd.asset_endpoint_id = ae.id
+		  WHERE a.tenant_id = $1 AND sd.enabled = TRUE`, tenantID)
+	if err != nil {
+		slog.Error("coverage-by-collection: covered endpoints", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to compute coverage")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to compute coverage")
+			return
+		}
+		covered[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to compute coverage")
+		return
+	}
+
+	views, err := h.store.ListAllEndpointViewsTenant(ctx)
+	if err != nil {
+		slog.Error("coverage-by-collection: endpoint views", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to compute coverage")
+		return
+	}
+	colls, err := h.store.ListCollections(ctx)
+	if err != nil {
+		slog.Error("coverage-by-collection: collections", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to compute coverage")
+		return
+	}
+
+	items, truncated := aggregateCoverageByCollection(views, covered, colls, coverageByCollectionLimit)
+	writeJSON(w, http.StatusOK, coverageByCollectionResponse{Items: items, Truncated: truncated})
+}
+
+// aggregateCoverageByCollection computes per-collection endpoint coverage for the
+// endpoint-scope collections, reusing rules.Match (the same predicate→members
+// evaluation collections use) and the caller-supplied covered-endpoint set (the
+// same "has an enabled scan_definition" rule as the global KPI). Rows are sorted
+// worst-coverage-first (tie-break by name) and capped at limit; the bool reports
+// whether the cap truncated. Pure, for testability.
+func aggregateCoverageByCollection(views []store.EndpointRow, covered map[string]bool, colls []model.Collection, limit int) ([]coverageRow, bool) {
+	items := make([]coverageRow, 0)
+	for ci := range colls {
+		c := &colls[ci]
+		if c.Scope != model.CollectionScopeEndpoint {
+			continue
+		}
+		matched, cov := 0, 0
+		for vi := range views {
+			ev := rules.EndpointView{Asset: &views[vi].Asset, Endpoint: &views[vi].Endpoint}
+			ok, err := rules.Match(c.Predicate, rules.ScopeEndpoint, ev)
+			if err != nil || !ok {
+				continue
+			}
+			matched++
+			if covered[views[vi].Endpoint.ID] {
+				cov++
+			}
+		}
+		pct := 0
+		if matched > 0 {
+			pct = cov * 100 / matched
+		}
+		items = append(items, coverageRow{
+			CollectionID:     c.ID,
+			Name:             c.Name,
+			MatchedEndpoints: matched,
+			CoveredEndpoints: cov,
+			CoveragePercent:  pct,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].CoveragePercent != items[j].CoveragePercent {
+			return items[i].CoveragePercent < items[j].CoveragePercent // worst first
+		}
+		return items[i].Name < items[j].Name
+	})
+	truncated := false
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+		truncated = true
+	}
+	return items, truncated
 }
 
 // ---- Suggested Actions --------------------------------------------
