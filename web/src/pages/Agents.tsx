@@ -91,8 +91,9 @@ export default function Agents() {
     () => (statusFilter ? (agents ?? []).filter((a) => a.status === statusFilter) : agents ?? []),
     [agents, statusFilter],
   );
-  const [allowlistFor, setAllowlistFor] = useState<Agent | null>(null);
-  const [consoleFor, setConsoleFor] = useState<Agent | null>(null);
+  // One unified detail drawer (General + Allowlist + Console + actions), opened
+  // by row-click — replaces the former separate AllowlistModal + ConsoleDrawer.
+  const [openAgent, setOpenAgent] = useState<Agent | null>(null);
   // Container agents can't self-upgrade in place — the action recreates the
   // container from the new image instead (ADR 013 follow-up).
   const [recreateFor, setRecreateFor] = useState<Agent | null>(null);
@@ -108,8 +109,37 @@ export default function Agents() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteAgent(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['agents'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      setOpenAgent(null); // the agent is gone — close its drawer if open
+    },
   });
+
+  // Shared action handlers (used by both the row actions and the drawer footer).
+  // triggerUpgrade keeps the in_container branching: binary → in-place upgrade;
+  // container/unknown → the recreate modal. Gate on status===connected at call
+  // sites (matches existing behavior).
+  const triggerUpgrade = (a: Agent) => {
+    if (a.in_container === false) {
+      if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
+        upgradeMutation.mutate(a.id);
+      }
+    } else {
+      setRecreateFor(a);
+    }
+  };
+  const doRotate = (a: Agent) => {
+    if (confirm(`Rotate the API key for ${a.name}? The current key keeps working until the agent reconnects with the new one.`)) {
+      rotateMutation.mutate(a.id);
+    }
+  };
+  const doDelete = (a: Agent) => {
+    if (confirm(`Delete agent ${a.name}? This revokes its key immediately.`)) {
+      deleteMutation.mutate(a.id);
+    }
+  };
+  const upgradeLabel = (a: Agent) =>
+    a.in_container === false ? 'Upgrade' : a.in_container ? 'Recreate from image' : 'Upgrade…';
 
   const upgradeMutation = useMutation({
     mutationFn: (id: string) => upgradeAgent(id),
@@ -125,10 +155,9 @@ export default function Agents() {
   });
 
   // Per-row actions. A plain render fn (not a component) so it closes over the
-  // mutations/setters without prop-drilling and without an inner component.
-  // Agents has no single row-detail action — multiple per-row actions instead —
-  // so rows are intentionally NOT clickable (no onRowClick / stopPropagation
-  // needed); the action buttons carry their own handlers.
+  // mutations/setters without prop-drilling. Rows are now clickable (open the
+  // unified detail drawer), so each action button stopPropagation's to avoid
+  // also opening the drawer; the same actions live in the drawer footer too.
   const renderActions = (a: Agent) => (
     <div
       style={{
@@ -138,66 +167,27 @@ export default function Agents() {
         gap: 'var(--ss-space-xs)',
       }}
     >
-      <button
-        className="btn btn-sm"
-        onClick={() => setConsoleFor(a)}
-        title="Open a live tail of this agent's log stream"
-      >
-        Console
-      </button>
-      <button
-        className="btn btn-sm"
-        onClick={() => setAllowlistFor(a)}
-        title="View the scan allowlist this agent most recently reported"
-      >
-        Allowlist
-      </button>
       {a.status === 'connected' && (
-        a.in_container === false ? (
-          // Positively known binary install → in-place self-upgrade.
-          <button
-            className="btn btn-sm"
-            disabled={upgradeMutation.isPending}
-            onClick={() => {
-              if (confirm(`Upgrade ${a.name} to the latest version? The agent will download the new binary, verify it, and restart.`)) {
-                upgradeMutation.mutate(a.id);
-              }
-            }}
-          >
-            Upgrade
-          </button>
-        ) : (
-          // Container (true) → recreate; unknown (null/undefined, e.g. agents
-          // predating mode reporting) → modal offers both rather than guessing
-          // in-place and silently failing.
-          <button
-            className="btn btn-sm"
-            title={a.in_container ? 'Container agents upgrade by recreating from the new image' : "This agent's deployment mode isn't known yet"}
-            onClick={() => setRecreateFor(a)}
-          >
-            {a.in_container ? 'Recreate from image' : 'Upgrade…'}
-          </button>
-        )
+        <button
+          className="btn btn-sm"
+          disabled={upgradeMutation.isPending}
+          title={a.in_container ? 'Container agents upgrade by recreating from the new image' : a.in_container === false ? undefined : "This agent's deployment mode isn't known yet"}
+          onClick={(e) => { e.stopPropagation(); triggerUpgrade(a); }}
+        >
+          {upgradeLabel(a)}
+        </button>
       )}
       <button
         className="btn btn-sm"
         disabled={rotateMutation.isPending}
-        onClick={() => {
-          if (confirm(`Rotate the API key for ${a.name}? The current key keeps working until the agent reconnects with the new one.`)) {
-            rotateMutation.mutate(a.id);
-          }
-        }}
+        onClick={(e) => { e.stopPropagation(); doRotate(a); }}
       >
         Rotate key
       </button>
       <button
         className="btn btn-sm btn-danger"
         disabled={deleteMutation.isPending}
-        onClick={() => {
-          if (confirm(`Delete agent ${a.name}? This revokes its key immediately.`)) {
-            deleteMutation.mutate(a.id);
-          }
-        }}
+        onClick={(e) => { e.stopPropagation(); doDelete(a); }}
       >
         Delete
       </button>
@@ -338,6 +328,7 @@ export default function Agents() {
           columns={columns}
           data={filteredAgents}
           getRowId={(a) => a.id}
+          onRowClick={(a) => setOpenAgent(a)}
           initialSorting={[{ id: 'name', desc: false }]}
         />
       )}
@@ -351,12 +342,18 @@ export default function Agents() {
         />
       )}
 
-      {allowlistFor && (
-        <AllowlistModal agent={allowlistFor} onClose={() => setAllowlistFor(null)} />
-      )}
-
-      {consoleFor && (
-        <ConsoleDrawer agent={consoleFor} onClose={() => setConsoleFor(null)} />
+      {openAgent && (
+        <AgentDetailDrawer
+          agent={openAgent}
+          onClose={() => setOpenAgent(null)}
+          onUpgrade={() => triggerUpgrade(openAgent)}
+          onRotate={() => doRotate(openAgent)}
+          onDelete={() => doDelete(openAgent)}
+          upgradeLabel={upgradeLabel(openAgent)}
+          upgrading={upgradeMutation.isPending}
+          rotating={rotateMutation.isPending}
+          deleting={deleteMutation.isPending}
+        />
       )}
 
       {recreateFor && (
@@ -408,11 +405,31 @@ export default function Agents() {
   );
 }
 
-// ConsoleDrawer — embeds <AgentLogConsole> in the same right-side drawer
-// pattern used by the Allowlist modal. Closes on Esc / backdrop / button.
-function ConsoleDrawer({ agent, onClose }: { agent: Agent; onClose: () => void }) {
-  // Esc to close — matches the design-system.md § 5.9 "Escape key +
-  // backdrop click dismiss non-destructive modals" rule.
+// Unified agent detail drawer — consolidates the former separate Console drawer
+// + Allowlist modal into one right-side drawer (opened by row-click), with a
+// General section and footer actions. Closes on Esc / backdrop / button.
+function AgentDetailDrawer({
+  agent,
+  onClose,
+  onUpgrade,
+  onRotate,
+  onDelete,
+  upgradeLabel,
+  upgrading,
+  rotating,
+  deleting,
+}: {
+  agent: Agent;
+  onClose: () => void;
+  onUpgrade: () => void;
+  onRotate: () => void;
+  onDelete: () => void;
+  upgradeLabel: string;
+  upgrading: boolean;
+  rotating: boolean;
+  deleting: boolean;
+}) {
+  // Esc to close — design-system.md § 5.9 (non-destructive dismiss).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -422,25 +439,67 @@ function ConsoleDrawer({ agent, onClose }: { agent: Agent; onClose: () => void }
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
-      <aside className="drawer drawer-wide" role="dialog" aria-label={`Agent console — ${agent.name}`}>
+      <aside className="drawer drawer-wide" role="dialog" aria-label={`Agent — ${agent.name}`}>
         <header className="drawer-header">
-          <h2>Console — {agent.name}</h2>
+          <h2>{agent.name}</h2>
           <button type="button" className="btn btn-sm" onClick={onClose}>×</button>
         </header>
         <div className="drawer-body">
-          <p className="muted" style={{ margin: 0 }}>
-            Live tail of info-and-above log lines from this agent. Debug
-            lines stay in the host log file. Past lines that happened
-            before you opened this console are not replayed.
-          </p>
-          <AgentLogConsole filter={{ agentId: agent.id }} />
+          <section>
+            <h3>General</h3>
+            <dl className="kv">
+              <dt>Name</dt>
+              <dd>{agent.name}</dd>
+              <dt>ID</dt>
+              <dd style={{ fontFamily: 'monospace', fontSize: 12 }}>{agent.id}</dd>
+              <dt>Status</dt>
+              <dd>{agent.status}</dd>
+              {agent.version && (<><dt>Version</dt><dd>{agent.version}</dd></>)}
+              {agent.zone && (<><dt>Zone</dt><dd>{agent.zone}</dd></>)}
+              {agent.last_heartbeat && (
+                <><dt>Last heartbeat</dt><dd>{new Date(agent.last_heartbeat).toLocaleString()}</dd></>
+              )}
+              <dt>Created</dt>
+              <dd>{new Date(agent.created_at).toLocaleString()}</dd>
+            </dl>
+          </section>
+
+          <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+            <h3>Scan allowlist</h3>
+            <AllowlistSection agent={agent} />
+          </section>
+
+          <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+            <h3>Agent log</h3>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Live tail of info-and-above log lines from this agent. Debug lines
+              stay in the host log file; lines before you opened this aren't replayed.
+            </p>
+            <AgentLogConsole filter={{ agentId: agent.id }} />
+          </section>
+
+          <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+            <h3>Actions</h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--ss-space-xs)' }}>
+              {agent.status === 'connected' && (
+                <button className="btn btn-sm" disabled={upgrading} onClick={onUpgrade}>
+                  {upgradeLabel}
+                </button>
+              )}
+              <button className="btn btn-sm" disabled={rotating} onClick={onRotate}>Rotate key</button>
+              <button className="btn btn-sm btn-danger" disabled={deleting} onClick={onDelete}>Delete</button>
+            </div>
+          </section>
         </div>
       </aside>
     </>
   );
 }
 
-function AllowlistModal({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+// AllowlistSection — the per-agent scan-allowlist viewer (formerly AllowlistModal's
+// body), now an inline drawer section. SilkStrand can't edit the allowlist; this
+// shows the most recent snapshot the agent reported over the tunnel.
+function AllowlistSection({ agent }: { agent: Agent }) {
   const { data, isLoading, error } = useQuery<AgentAllowlist>({
     queryKey: ['agent-allowlist', agent.id],
     queryFn: () => getAgentAllowlist(agent.id),
@@ -451,70 +510,58 @@ function AllowlistModal({ agent, onClose }: { agent: Agent; onClose: () => void 
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} />
-      <aside className="drawer">
-        <header className="drawer-header">
-          <h2>Allowlist — {agent.name}</h2>
-          <button type="button" className="btn btn-sm" onClick={onClose}>×</button>
-        </header>
-        <div className="drawer-body">
-          <p className="muted" style={{ marginTop: 0 }}>
-            The scan allowlist lives on the agent host at{' '}
-            <code>/etc/silkstrand/scan-allowlist.yaml</code>. SilkStrand cannot
-            edit it — this panel shows the most recent snapshot the agent
-            reported over the tunnel. Edit the file on the host to change
-            what the agent is willing to scan.
-          </p>
-          {isLoading && <p>Loading…</p>}
-          {notReported && (
-            <p className="muted">
-              This agent has not reported an allowlist yet. It may be running
-              an older binary, or have no allowlist file configured.
-            </p>
+      <p className="muted" style={{ marginTop: 0 }}>
+        The scan allowlist lives on the agent host at{' '}
+        <code>/etc/silkstrand/scan-allowlist.yaml</code>. SilkStrand cannot edit
+        it — this shows the most recent snapshot the agent reported over the
+        tunnel. Edit the file on the host to change what it's willing to scan.
+      </p>
+      {isLoading && <p>Loading…</p>}
+      {notReported && (
+        <p className="muted">
+          This agent has not reported an allowlist yet. It may be running an
+          older binary, or have no allowlist file configured.
+        </p>
+      )}
+      {error && !notReported && <p className="error">{(error as Error).message}</p>}
+      {data && (
+        <>
+          <dl className="kv">
+            <dt>snapshot hash</dt>
+            <dd style={{ fontFamily: 'monospace', fontSize: 12 }}>
+              {data.snapshot_hash.slice(0, 16)}…
+            </dd>
+            <dt>reported</dt>
+            <dd>{new Date(data.reported_at).toLocaleString()}</dd>
+            <dt>updated</dt>
+            <dd>{new Date(data.updated_at).toLocaleString()}</dd>
+            {data.rate_limit_pps > 0 && (
+              <>
+                <dt>rate cap</dt>
+                <dd>{data.rate_limit_pps} pps</dd>
+              </>
+            )}
+          </dl>
+          <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+            <h3>Allow ({data.allow.length})</h3>
+            {data.allow.length === 0 ? (
+              <p className="muted">Empty — the agent will refuse every scan directive.</p>
+            ) : (
+              <ul style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                {data.allow.map((rule) => (<li key={rule}>{rule}</li>))}
+              </ul>
+            )}
+          </section>
+          {data.deny.length > 0 && (
+            <section style={{ marginTop: 'var(--ss-space-lg)' }}>
+              <h3>Deny ({data.deny.length})</h3>
+              <ul style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                {data.deny.map((rule) => (<li key={rule}>{rule}</li>))}
+              </ul>
+            </section>
           )}
-          {error && !notReported && <p className="error">{(error as Error).message}</p>}
-          {data && (
-            <>
-              <dl className="kv">
-                <dt>snapshot hash</dt>
-                <dd style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                  {data.snapshot_hash.slice(0, 16)}…
-                </dd>
-                <dt>reported</dt>
-                <dd>{new Date(data.reported_at).toLocaleString()}</dd>
-                <dt>updated</dt>
-                <dd>{new Date(data.updated_at).toLocaleString()}</dd>
-                {data.rate_limit_pps > 0 && (
-                  <>
-                    <dt>rate cap</dt>
-                    <dd>{data.rate_limit_pps} pps</dd>
-                  </>
-                )}
-              </dl>
-              <section style={{ marginTop: 'var(--ss-space-lg)' }}>
-                <h3>Allow ({data.allow.length})</h3>
-                {data.allow.length === 0 ? (
-                  <p className="muted">
-                    Empty — the agent will refuse every scan directive.
-                  </p>
-                ) : (
-                  <ul style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                    {data.allow.map((rule) => (<li key={rule}>{rule}</li>))}
-                  </ul>
-                )}
-              </section>
-              {data.deny.length > 0 && (
-                <section style={{ marginTop: 'var(--ss-space-lg)' }}>
-                  <h3>Deny ({data.deny.length})</h3>
-                  <ul style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                    {data.deny.map((rule) => (<li key={rule}>{rule}</li>))}
-                  </ul>
-                </section>
-              )}
-            </>
-          )}
-        </div>
-      </aside>
+        </>
+      )}
     </>
   );
 }
