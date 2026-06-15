@@ -770,6 +770,13 @@ export interface DashboardKpis {
   coverage_percent: number;
   critical_findings: number;
   new_this_week: number;
+  findings_by_severity: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    info: number;
+  };
   deltas: {
     assets_new_this_week: number;
     findings_new_today: number;

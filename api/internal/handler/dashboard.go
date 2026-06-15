@@ -52,12 +52,24 @@ type kpiDeltas struct {
 	UnresolvedNewWeek  int `json:"unresolved_new_week"`
 }
 
+// findingsBySeverity is the open-findings count per severity, tenant-scoped.
+// Powers the Dashboard "Findings by severity" summary; additive alongside the
+// existing critical_findings KPI card.
+type findingsBySeverity struct {
+	Critical int `json:"critical"`
+	High     int `json:"high"`
+	Medium   int `json:"medium"`
+	Low      int `json:"low"`
+	Info     int `json:"info"`
+}
+
 type kpiResponse struct {
-	TotalAssets      int       `json:"total_assets"`
-	CoveragePercent  int       `json:"coverage_percent"`
-	CriticalFindings int       `json:"critical_findings"`
-	NewThisWeek      int       `json:"new_this_week"`
-	Deltas           kpiDeltas `json:"deltas"`
+	TotalAssets        int                `json:"total_assets"`
+	CoveragePercent    int                `json:"coverage_percent"`
+	CriticalFindings   int                `json:"critical_findings"`
+	NewThisWeek        int                `json:"new_this_week"`
+	FindingsBySeverity findingsBySeverity `json:"findings_by_severity"`
+	Deltas             kpiDeltas          `json:"deltas"`
 }
 
 // GET /api/v1/dashboard/kpis
@@ -113,6 +125,34 @@ func (h *DashboardHandler) GetKPIs(w http.ResponseWriter, r *http.Request) {
 		  WHERE tenant_id = $1 AND status = 'open' AND severity = 'critical'`,
 		tenantID,
 	).Scan(&resp.CriticalFindings)
+
+	// Open findings by severity (one grouped query) for the severity summary.
+	if sevRows, err := h.db.QueryContext(ctx,
+		`SELECT COALESCE(severity, 'info'), COUNT(*) FROM findings
+		  WHERE tenant_id = $1 AND status = 'open'
+		  GROUP BY severity`, tenantID,
+	); err == nil {
+		defer sevRows.Close()
+		for sevRows.Next() {
+			var sev string
+			var n int
+			if err := sevRows.Scan(&sev, &n); err != nil {
+				continue
+			}
+			switch sev {
+			case "critical":
+				resp.FindingsBySeverity.Critical = n
+			case "high":
+				resp.FindingsBySeverity.High = n
+			case "medium":
+				resp.FindingsBySeverity.Medium = n
+			case "low":
+				resp.FindingsBySeverity.Low = n
+			case "info":
+				resp.FindingsBySeverity.Info = n
+			}
+		}
+	}
 
 	// New this week = assets first_seen within 7d.
 	weekAgo := time.Now().Add(-7 * 24 * time.Hour)
