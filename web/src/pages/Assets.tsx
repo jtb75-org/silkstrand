@@ -88,6 +88,33 @@ function severityBadgeClass(sev: string): string {
   }
 }
 
+// Compact per-severity breakdown for the Assets tab — small count pills
+// (e.g. "2 C · 3 H · 1 M"), colored by the existing severity badge buckets.
+// Counts come from asset.risk, which GET /api/v1/assets already populates
+// (open-finding severity rollup), so no backend change is needed.
+function SeverityBreakdown({ asset }: { asset: DiscoveredAsset }) {
+  const r = asset.risk;
+  const parts = r
+    ? ([
+        { sev: 'critical', label: 'C', n: r.critical },
+        { sev: 'high', label: 'H', n: r.high },
+        { sev: 'medium', label: 'M', n: r.medium },
+        { sev: 'low', label: 'L', n: r.low },
+        { sev: 'info', label: 'I', n: r.info },
+      ] as const).filter((p) => p.n > 0)
+    : [];
+  if (parts.length === 0) return <span className="muted">—</span>;
+  return (
+    <span style={{ display: 'inline-flex', gap: 'var(--ss-space-xs)', flexWrap: 'wrap' }}>
+      {parts.map((p) => (
+        <span key={p.sev} className={severityBadgeClass(p.sev)} title={`${p.n} ${p.sev}`}>
+          {p.n} {p.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** Resolve the display hostname for an asset (flat or legacy shape). */
 function assetHost(a: DiscoveredAsset): string {
   return a.hostname || a.primary_ip || a.ip || '-';
@@ -484,8 +511,26 @@ function AssetsView({
   onSelect: (id: string) => void;
 }) {
   const columns: ColumnDef<DiscoveredAsset>[] = [
-    { id: 'host', header: 'Host', accessorFn: (a) => assetHost(a) },
-    { id: 'ip', header: 'IP', accessorFn: (a) => assetIP(a) },
+    {
+      // Stacked identity cell (mock pattern): host primary, IP muted beneath.
+      // Sorts by host. Replaces the separate Host + IP columns.
+      id: 'asset',
+      header: 'Asset',
+      accessorFn: (a) => assetHost(a),
+      cell: ({ row }) => {
+        const host = assetHost(row.original);
+        const ip = assetIP(row.original);
+        const showIP = ip !== '-' && ip !== host;
+        return (
+          <div>
+            <div>{host}</div>
+            {showIP && (
+              <div className="muted" style={{ fontSize: 'var(--ss-text-body-sm)' }}>{ip}</div>
+            )}
+          </div>
+        );
+      },
+    },
     { id: 'type', header: 'Type', accessorFn: (a) => a.resource_type || '-' },
     { id: 'env', header: 'Env', accessorFn: (a) => a.environment || '-' },
     {
@@ -494,13 +539,11 @@ function AssetsView({
       accessorFn: (a) => a.endpoints_count ?? 0,
     },
     {
+      // Per-severity breakdown (count pills); sorts by worst severity rank.
       id: 'severity',
-      header: 'Max severity',
+      header: 'Severity',
       accessorFn: (a) => topSeverity(a) ?? '',
-      cell: ({ row }) => {
-        const sev = topSeverity(row.original);
-        return sev ? <span className={severityBadgeClass(sev)}>{sev}</span> : '-';
-      },
+      cell: ({ row }) => <SeverityBreakdown asset={row.original} />,
       sortingFn: (a, b) => sevRank(topSeverity(a.original)) - sevRank(topSeverity(b.original)),
     },
     {
