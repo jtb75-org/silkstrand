@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mergeProgress, stageState } from './scanProgress';
+import { mergeProgress, overallPercent, stageState } from './scanProgress';
+import type { ProgressView } from './scanProgress';
 import type { ScanDetail, ScanProgressPayload } from '../api/types';
 
 function detail(over: Partial<ScanDetail>): ScanDetail {
@@ -146,5 +147,48 @@ describe('stageState', () => {
   it('is all pending before any stage is reported', () => {
     const c = { key: 'c', status: 'running' };
     expect(stageState('naabu', c)).toBe('pending');
+  });
+});
+
+describe('overallPercent', () => {
+  function view(over: Partial<ProgressView>): ProgressView {
+    return {
+      status: 'running',
+      chunksTotal: 1,
+      chunksCompleted: 0,
+      chunksFailed: 0,
+      chunks: [],
+      hasChunkModel: true,
+      ...over,
+    };
+  }
+
+  it('multi-chunk uses chunk completion (unchanged behavior)', () => {
+    expect(overallPercent(view({ chunksTotal: 4, chunksCompleted: 1 }))).toBe(25);
+    expect(overallPercent(view({ chunksTotal: 4, chunksCompleted: 2 }))).toBe(50);
+    expect(overallPercent(view({ chunksTotal: 3, chunksCompleted: 3, status: 'completed' }))).toBe(100);
+  });
+
+  it('single-chunk falls back to stage progression (~0/33/67/100)', () => {
+    const single = (currentStage?: string, status = 'running') =>
+      view({ chunks: [{ key: 'c', status, currentStage }] });
+    // No stage reported yet / naabu in flight -> 0.
+    expect(overallPercent(single())).toBe(0);
+    expect(overallPercent(single('naabu'))).toBe(0);
+    // naabu done, httpx active -> 33.
+    expect(overallPercent(single('httpx'))).toBe(33);
+    // naabu + httpx done, nuclei active -> 67.
+    expect(overallPercent(single('nuclei'))).toBe(67);
+    // chunk completed -> 100.
+    expect(overallPercent(single('nuclei', 'completed'))).toBe(100);
+  });
+
+  it('single-chunk terminal scan is 100', () => {
+    expect(overallPercent(view({ status: 'completed', chunks: [{ key: 'c', status: 'running', currentStage: 'naabu' }] }))).toBe(100);
+  });
+
+  it('compliance (no chunk model) is 100 when terminal else 0', () => {
+    expect(overallPercent(view({ hasChunkModel: false, chunksTotal: 0, status: 'running' }))).toBe(0);
+    expect(overallPercent(view({ hasChunkModel: false, chunksTotal: 0, status: 'completed' }))).toBe(100);
   });
 });
