@@ -78,6 +78,22 @@ export default function Findings() {
   const [since, setSince] = useState('');
   const [until, setUntil] = useState('');
   const [openFinding, setOpenFinding] = useState<Finding | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const toggleRow = (id: string) =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const toggleAll = (ids: string[], checked: boolean) =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (checked) ids.forEach((id) => n.add(id));
+      else ids.forEach((id) => n.delete(id));
+      return n;
+    });
 
   const { data: collections } = useQuery<Collection[]>({
     queryKey: ['collections', { scope: 'finding' }],
@@ -114,6 +130,20 @@ export default function Findings() {
     },
   });
 
+  // Bulk suppress/reopen — no bulk endpoint exists, so fan out the existing
+  // per-id mutations and invalidate once. Clears the selection on success.
+  const bulkMut = useMutation({
+    mutationFn: async ({ ids, action }: { ids: string[]; action: 'suppress' | 'reopen' }) => {
+      const fn = action === 'suppress' ? suppressFinding : reopenFinding;
+      await Promise.all(ids.map((id) => fn(id)));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings'] });
+      queryClient.invalidateQueries({ queryKey: ['finding'] });
+      setSelectedIds(new Set());
+    },
+  });
+
   // Column defs are inline (cheap; data is the stable react-query result).
   // Filtering stays server-side (the existing query params); TanStack adds the
   // client-side column sorting the old table lacked.
@@ -125,7 +155,21 @@ export default function Findings() {
       cell: ({ row }) => <SeverityBadge severity={row.original.severity} />,
       sortingFn: (a, b) => sevRank(a.original.severity) - sevRank(b.original.severity),
     },
-    { id: 'title', header: 'Title', accessorKey: 'title' },
+    {
+      id: 'title',
+      header: 'Title',
+      accessorFn: (f) => f.title,
+      cell: ({ row }) => (
+        <div>
+          <div>{row.original.title}</div>
+          {row.original.cve_id && (
+            <div className="muted" style={{ fontFamily: 'monospace', fontSize: 'var(--ss-text-body-sm)' }}>
+              {row.original.cve_id}
+            </div>
+          )}
+        </div>
+      ),
+    },
     {
       id: 'source',
       header: 'Source',
@@ -270,11 +314,45 @@ export default function Findings() {
         </div>
       )}
 
+      {selectedIds.size > 0 && (
+        <div
+          className="form-card"
+          style={{ display: 'flex', alignItems: 'center', gap: 'var(--ss-space-md)', marginBottom: 'var(--ss-space-sm)' }}
+        >
+          <strong>{selectedIds.size} selected</strong>
+          <button
+            className="btn btn-sm"
+            disabled={bulkMut.isPending}
+            onClick={() => bulkMut.mutate({ ids: Array.from(selectedIds), action: 'suppress' })}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+              <EyeOff size={14} /> Suppress selected
+            </span>
+          </button>
+          <button
+            className="btn btn-sm"
+            disabled={bulkMut.isPending}
+            onClick={() => bulkMut.mutate({ ids: Array.from(selectedIds), action: 'reopen' })}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--ss-space-xs)' }}>
+              <Eye size={14} /> Reopen selected
+            </span>
+          </button>
+          <button className="btn btn-sm" disabled={bulkMut.isPending} onClick={() => setSelectedIds(new Set())}>
+            Clear
+          </button>
+        </div>
+      )}
+
       {findings && findings.length > 0 && (
         <DataTable
           columns={columns}
           data={findings}
           getRowId={(f) => f.id}
+          selectable
+          selectedIds={selectedIds}
+          onToggleRow={toggleRow}
+          onToggleAll={toggleAll}
           onRowClick={(f) => setOpenFinding(f)}
           initialSorting={[{ id: 'severity', desc: true }]}
         />
