@@ -95,8 +95,8 @@ for name in $BUNDLES; do
   if command -v python3 >/dev/null 2>&1; then
     printf '%s' "$resp" | python3 -c 'import sys, json
 b = json.load(sys.stdin).get("bundle", {})
-print(f"    registered: id={b.get(\"id\")} version={b.get(\"version\")} "
-      f"control_count={b.get(\"control_count\")} gcs_path={b.get(\"gcs_path\")}")'
+print("    registered: id={} version={} control_count={} gcs_path={}".format(
+    b.get("id"), b.get("version"), b.get("control_count"), b.get("gcs_path")))'
   else
     echo "    registered: $resp"
   fi
