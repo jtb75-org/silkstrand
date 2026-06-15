@@ -1,4 +1,4 @@
-.PHONY: dev dev-deps build test lint docker run migrate-up migrate-down clean seed seed-mssql seed-mongo jwt hash-password bundle bundle-all bundle-sign collector-mssql collector-mssql-all
+.PHONY: dev dev-deps build test lint docker run migrate-up migrate-down clean seed seed-mssql seed-mongo jwt hash-password bundle bundle-all bundle-sign publish-bundles collector-mssql collector-mssql-all
 
 # Start local dependencies (Postgres + Redis)
 dev-deps:
@@ -86,6 +86,12 @@ bundle-all:
 
 bundle-sign:
 	@scripts/build-bundle.sh $(BUNDLE) --sign $(SIGN_KEY)
+
+# Build, upload (mc → public MinIO), and register the CIS bundles so their
+# bundles.gcs_path is set and off-cluster agents can fetch them. Requires
+# MINIO_ACCESS_KEY/MINIO_SECRET_KEY + API_URL + JWT (see scripts/publish-bundles.sh).
+publish-bundles:
+	@scripts/publish-bundles.sh $(BUNDLES)
 
 # --- Collectors ---
 
