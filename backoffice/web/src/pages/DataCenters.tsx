@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Server, Pencil, Trash2 } from 'lucide-react';
 import {
   listDataCenters,
   createDataCenter,
@@ -14,6 +16,9 @@ import type {
   DCEnvironment,
 } from '../api/types';
 import StatusBadge from '../components/StatusBadge';
+import DataTable from '../components/DataTable';
+import EmptyState from '../components/EmptyState';
+import Menu from '../components/Menu';
 import { relativeTime } from '../lib/time';
 
 export default function DataCenters() {
@@ -86,6 +91,77 @@ export default function DataCenters() {
       deleteMutation.mutate(id);
     }
   }
+
+  const columns: ColumnDef<DataCenter>[] = [
+    { accessorKey: 'name', header: 'Name' },
+    { accessorKey: 'region', header: 'Region' },
+    {
+      accessorKey: 'environment',
+      header: 'Environment',
+      cell: ({ row }) => (
+        <span className={`env-badge env-${row.original.environment}`}>
+          {row.original.environment}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+    },
+    {
+      accessorKey: 'last_health_status',
+      header: 'Health',
+      cell: ({ row }) => (
+        <>
+          <StatusBadge status={row.original.last_health_status || 'unknown'} />
+          <span
+            className="text-muted"
+            style={{ marginLeft: 'var(--ss-space-sm)', fontSize: 'var(--ss-text-caption)' }}
+          >
+            {relativeTime(row.original.last_health_check)}
+          </span>
+        </>
+      ),
+    },
+    { accessorKey: 'tenant_count', header: 'Tenants' },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => new Date(row.original.created_at).toLocaleString(),
+    },
+    {
+      id: 'actions',
+      header: () => <span className="sr-only">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const dc = row.original;
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <Menu
+              ariaLabel={`Actions for ${dc.name}`}
+              items={[
+                {
+                  key: 'edit',
+                  label: 'Edit',
+                  icon: <Pencil size={14} />,
+                  onSelect: () => setEditing(dc),
+                },
+                {
+                  key: 'delete',
+                  label: 'Delete',
+                  icon: <Trash2 size={14} />,
+                  destructive: true,
+                  disabled: deleteMutation.isPending,
+                  onSelect: () => handleDelete(dc.id),
+                },
+              ]}
+            />
+          </div>
+        );
+      },
+    },
+  ];
 
   return (
     <div>
@@ -221,71 +297,19 @@ export default function DataCenters() {
         </div>
       )}
 
-      {isLoading && <p>Loading...</p>}
+      {isLoading && <p className="text-muted">Loading…</p>}
       {error && <p className="error">Failed to load data centers: {(error as Error).message}</p>}
-      {!isLoading && dataCenters && dataCenters.length === 0 && <p>No data centers registered.</p>}
+      {!isLoading && dataCenters && dataCenters.length === 0 && (
+        <EmptyState icon={<Server />} title="No data centers registered." />
+      )}
       {dataCenters && dataCenters.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Region</th>
-              <th>Environment</th>
-              <th>Status</th>
-              <th>Health</th>
-              <th>Tenants</th>
-              <th>Created</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {dataCenters.map((dc) => (
-              <tr
-                key={dc.id}
-                className="clickable-row"
-                onClick={() => navigate(`/data-centers/${dc.id}`)}
-              >
-                <td>{dc.name}</td>
-                <td>{dc.region}</td>
-                <td>
-                  <span className={`env-badge env-${dc.environment}`}>{dc.environment}</span>
-                </td>
-                <td>
-                  <StatusBadge status={dc.status} />
-                </td>
-                <td>
-                  <StatusBadge status={dc.last_health_status || 'unknown'} />
-                  <span className="text-muted" style={{ marginLeft: 8, fontSize: 12 }}>
-                    {relativeTime(dc.last_health_check)}
-                  </span>
-                </td>
-                <td>{dc.tenant_count}</td>
-                <td>{new Date(dc.created_at).toLocaleString()}</td>
-                <td className="row-actions">
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditing(dc);
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-danger btn-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(dc.id);
-                    }}
-                    disabled={deleteMutation.isPending}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<DataCenter>
+          columns={columns}
+          data={dataCenters}
+          getRowId={(dc) => dc.id}
+          initialSorting={[{ id: 'name', desc: false }]}
+          onRowClick={(dc) => navigate(`/data-centers/${dc.id}`)}
+        />
       )}
     </div>
   );
