@@ -15,7 +15,13 @@ SELECT pg_reload_conf();"""
 QUERY = """SHOW log_line_prefix;"""
 
 ASSERTIONS = [
-    ("log_line_prefix", "pattern_match", ".+"),
+    # CIS 3.1.24 expects the prefix to carry timestamp (%m), user (%u),
+    # database (%d), and PID (%p). The PG default '%m [%p] ' lacks %u and %d, so
+    # the old ".+" (any non-empty) passed vacuously. Require each escape.
+    ("log_line_prefix", "pattern_match", "%m"),
+    ("log_line_prefix", "pattern_match", "%u"),
+    ("log_line_prefix", "pattern_match", "%d"),
+    ("log_line_prefix", "pattern_match", "%p"),
 ]
 
 

@@ -10,12 +10,15 @@ TITLE = "Ensure per-account connection limits are used"
 SEVERITY = "low"
 REMEDIATION = """ALTER ROLE <username> CONNECTION LIMIT <n>;"""
 
+# CIS 5.5 doesn't exempt the postgres superuser — on a default install where
+# postgres is the only login role (rolconnlimit = -1, unlimited), excluding it
+# made the check pass vacuously. Only the reserved pg_* roles are excluded
+# (rolcanlogin already filters the NOLOGIN ones; the LIKE is belt-and-braces).
 QUERY = """SELECT rolname, rolconnlimit
 FROM pg_authid
 WHERE rolcanlogin = true
   AND rolconnlimit = -1
-  AND rolname NOT LIKE 'pg_%'
-  AND rolname <> 'postgres';"""
+  AND rolname NOT LIKE 'pg_%';"""
 
 
 def _read_json(path):
