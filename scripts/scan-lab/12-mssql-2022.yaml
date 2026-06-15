@@ -1,0 +1,42 @@
+# SQL Server 2022 — stock image, sa enabled with a known password = fails CIS
+# MSSQL-2022 controls (sa not disabled/renamed, defaults on). Developer edition.
+# NOTE: needs ~2Gi RAM; runs as uid 10001 (fsGroup). Known creds: sa / Scanlab!2022.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mssql-2022
+  namespace: scan-lab
+  labels: { app: mssql-2022 }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mssql-2022 } }
+  template:
+    metadata:
+      labels: { app: mssql-2022 }
+    spec:
+      securityContext: { fsGroup: 10001 }
+      containers:
+        - name: mssql
+          image: mcr.microsoft.com/mssql/server:2022-latest
+          env:
+            - { name: ACCEPT_EULA, value: "Y" }
+            - { name: MSSQL_SA_PASSWORD, value: "Scanlab!2022" }
+            - { name: MSSQL_PID, value: "Developer" }
+          ports:
+            - { containerPort: 1433 }
+          resources:
+            requests: { memory: "2Gi" }
+            limits: { memory: "4Gi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-2022
+  namespace: scan-lab
+  annotations:
+    kube-vip.io/loadbalancerIPs: "192.168.0.232"
+spec:
+  type: LoadBalancer
+  selector: { app: mssql-2022 }
+  ports:
+    - { name: mssql, port: 1433, targetPort: 1433 }

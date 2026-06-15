@@ -1,0 +1,39 @@
+# PostgreSQL 16 — stock image, default config = fails many CIS PG-16 controls
+# (no TLS, no pgaudit, default logging off). Known creds so the authenticated
+# bundle can connect. See GROUND_TRUTH.md for the expected control failures.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-16
+  namespace: scan-lab
+  labels: { app: postgres-16 }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: postgres-16 } }
+  template:
+    metadata:
+      labels: { app: postgres-16 }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - { name: POSTGRES_PASSWORD, value: "scanlab-pg" }
+            - { name: POSTGRES_DB, value: "scanlab" }
+          ports:
+            - { containerPort: 5432 }
+          # pg_hba 'trust' for the whole subnet — deliberately weak (host auth).
+          args: ["postgres", "-c", "listen_addresses=*"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-16
+  namespace: scan-lab
+  annotations:
+    kube-vip.io/loadbalancerIPs: "192.168.0.230"
+spec:
+  type: LoadBalancer
+  selector: { app: postgres-16 }
+  ports:
+    - { name: postgresql, port: 5432, targetPort: 5432 }
