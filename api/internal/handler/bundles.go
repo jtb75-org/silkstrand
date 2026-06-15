@@ -28,14 +28,15 @@ import (
 const maxUploadSize = 50 << 20
 
 type BundlesHandler struct {
-	store       store.Store
-	storagePath string // local filesystem path for bundle tarballs (v1)
-	gcsBucket   string // GCS bucket name for bundle tarballs (empty = local-only)
-	policyDir   string // path to controls/ directory with per-control Rego policies
+	store         store.Store
+	storagePath   string // local filesystem path for bundle tarballs (v1)
+	gcsBucket     string // GCS bucket name for bundle tarballs (empty = local-only)
+	publicBaseURL string // public base URL for published tarballs (homelab MinIO; sets gcs_path when GCS unset)
+	policyDir     string // path to controls/ directory with per-control Rego policies
 }
 
-func NewBundlesHandler(s store.Store, storagePath, gcsBucket, policyDir string) *BundlesHandler {
-	return &BundlesHandler{store: s, storagePath: storagePath, gcsBucket: gcsBucket, policyDir: policyDir}
+func NewBundlesHandler(s store.Store, storagePath, gcsBucket, publicBaseURL, policyDir string) *BundlesHandler {
+	return &BundlesHandler{store: s, storagePath: storagePath, gcsBucket: gcsBucket, publicBaseURL: publicBaseURL, policyDir: policyDir}
 }
 
 // GET /api/v1/bundles (tenant-authed)
@@ -283,8 +284,15 @@ func (h *BundlesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			gcsPath = &gcsURL
 			slog.Info("bundle uploaded to GCS", "url", gcsURL)
 		}
+	} else if url := bundlePublicURL(h.publicBaseURL, manifest.Name, manifest.Version); url != "" {
+		// Homelab: no GCS. The publish script (scripts/publish-bundles.sh) uploads
+		// the tarball + sibling .sha256 to the public MinIO host at this exact
+		// path, so the off-cluster agent can fetch bundle_url. Mirrors the
+		// agent-release download pattern; no MinIO client in the API.
+		gcsPath = &url
+		slog.Info("bundle public URL registered", "url", url)
 	} else {
-		slog.Warn("BUNDLE_GCS_BUCKET not configured, skipping GCS upload (local-only mode)")
+		slog.Warn("neither BUNDLE_GCS_BUCKET nor BUNDLE_PUBLIC_BASE_URL configured; gcs_path will be NULL (local-only mode)")
 	}
 
 	// Build the bundle model.
@@ -573,6 +581,18 @@ func storeTarball(basePath, name, version string, data []byte) error {
 		return fmt.Errorf("writing tarball: %w", err)
 	}
 	return nil
+}
+
+// bundlePublicURL returns the public download URL for a bundle tarball given the
+// configured base (e.g. https://downloads.silkstrand.io/agent/bundles), or ""
+// when no base is set (local-only dev → gcs_path stays NULL). The publish script
+// uploads the object to this exact key so the off-cluster agent can fetch
+// bundle_url (+ a sibling .sha256). A trailing slash on the base is tolerated.
+func bundlePublicURL(baseURL, name, version string) string {
+	if baseURL == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s-%s.tar.gz", strings.TrimRight(baseURL, "/"), name, version)
 }
 
 // uploadToGCS uploads data to a GCS bucket using gsutil (available on Cloud

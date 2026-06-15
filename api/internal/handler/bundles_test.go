@@ -179,3 +179,44 @@ func TestBuildControlRows(t *testing.T) {
 		t.Errorf("rows[1].Name = %q, want pg-unknown-control", rows[1].Name)
 	}
 }
+
+func TestBundlePublicURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		bundle  string
+		version string
+		want    string
+	}{
+		{
+			name:    "base set -> public tarball URL (gcs_path)",
+			baseURL: "https://downloads.silkstrand.io/agent/bundles",
+			bundle:  "cis-postgresql-16",
+			version: "1.0.0",
+			want:    "https://downloads.silkstrand.io/agent/bundles/cis-postgresql-16-1.0.0.tar.gz",
+		},
+		{
+			name:    "trailing slash on base is tolerated",
+			baseURL: "https://downloads.silkstrand.io/agent/bundles/",
+			bundle:  "cis-mssql-2022",
+			version: "2.1.0",
+			want:    "https://downloads.silkstrand.io/agent/bundles/cis-mssql-2022-2.1.0.tar.gz",
+		},
+		{
+			name:    "no base -> empty (gcs_path stays NULL, local-only)",
+			baseURL: "",
+			bundle:  "cis-mongodb-8",
+			version: "1.0.0",
+			want:    "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bundlePublicURL(tc.baseURL, tc.bundle, tc.version); got != tc.want {
+				t.Errorf("bundlePublicURL(%q, %q, %q) = %q, want %q",
+					tc.baseURL, tc.bundle, tc.version, got, tc.want)
+			}
+		})
+	}
+}

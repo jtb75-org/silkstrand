@@ -20,6 +20,7 @@ type Config struct {
 	BundleStoragePath       string   // Local filesystem path for uploaded bundle tarballs (v1)
 	BundleControlsDir       string   // Path to individual controls/ directory for server-side bundle assembly
 	BundleGCSBucket         string   // GCS bucket for bundle tarballs (empty = local-only dev mode)
+	BundlePublicBaseURL     string   // Public base URL for published bundle tarballs (homelab MinIO, e.g. https://downloads.silkstrand.io/bundles). Sets bundles.gcs_path when GCS is unset.
 	PoliciesDir             string   // Path to builtin policies/ directory for copy-from-builtin
 	PolicyDir               string   // Directory containing Rego policy files (ADR 011 D10)
 	AuditEventsEnabled      bool     // ADR 005: enable audit event persistence (default true)
@@ -53,6 +54,7 @@ func Load() (*Config, error) {
 		BundleStoragePath:       getEnv("BUNDLE_STORAGE_PATH", ""),
 		BundleControlsDir:       getEnv("BUNDLE_CONTROLS_DIR", "./controls"),
 		BundleGCSBucket:         getEnv("BUNDLE_GCS_BUCKET", ""),
+		BundlePublicBaseURL:     getEnv("BUNDLE_PUBLIC_BASE_URL", ""),
 		PoliciesDir:             getEnv("POLICIES_DIR", "./policies"),
 		PolicyDir:               getEnv("POLICY_DIR", "./policies"),
 		AuditEventsEnabled:      auditEnabled,
