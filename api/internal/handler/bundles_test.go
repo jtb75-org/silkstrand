@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"strings"
 	"testing"
 )
 
@@ -218,5 +219,56 @@ func TestBundlePublicURL(t *testing.T) {
 					tc.baseURL, tc.bundle, tc.version, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveBundleSlug(t *testing.T) {
+	tests := []struct {
+		name         string
+		formSlug     string
+		manifestName string
+		want         string
+	}{
+		{
+			name:         "slug form field wins (the reachable mc object key)",
+			formSlug:     "cis-postgresql-16",
+			manifestName: "CIS PostgreSQL 16 Benchmark",
+			want:         "cis-postgresql-16",
+		},
+		{
+			name:         "no slug -> falls back to manifest display name",
+			formSlug:     "",
+			manifestName: "CIS PostgreSQL 16 Benchmark",
+			want:         "CIS PostgreSQL 16 Benchmark",
+		},
+		{
+			name:         "whitespace-only slug -> falls back",
+			formSlug:     "   ",
+			manifestName: "cis-mongodb-8",
+			want:         "cis-mongodb-8",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBundleSlug(tc.formSlug, tc.manifestName); got != tc.want {
+				t.Errorf("resolveBundleSlug(%q, %q) = %q, want %q",
+					tc.formSlug, tc.manifestName, got, tc.want)
+			}
+		})
+	}
+}
+
+// Anchors the bug: the display name produces a spaces-in-path URL (404), while
+// the slug produces the reachable URL the script uploads to.
+func TestBundlePublicURLSlugVsDisplayName(t *testing.T) {
+	base := "https://downloads.silkstrand.io/agent/bundles"
+	slugURL := bundlePublicURL(base, "cis-postgresql-16", "2.0.4")
+	if strings.Contains(slugURL, " ") {
+		t.Errorf("slug URL should have no spaces, got %q", slugURL)
+	}
+	nameURL := bundlePublicURL(base, "CIS PostgreSQL 16 Benchmark", "2.0.4")
+	if !strings.Contains(nameURL, " ") {
+		t.Errorf("display-name URL expected to contain spaces (the bug), got %q", nameURL)
 	}
 }

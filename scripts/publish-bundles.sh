@@ -87,9 +87,13 @@ for name in $BUNDLES; do
   # 4. Register with the DC API → upserts the bundle row + controls and sets
   #    gcs_path from BUNDLE_PUBLIC_BASE_URL (Part A). curl's default UA is fine
   #    (the Cloudflare WAF block applies to urllib's default UA, not curl).
+  #    slug=$name = the directory name = the mc object key, so the API registers
+  #    gcs_path against the reachable slug path, not bundle.yaml's display name
+  #    (which has spaces and would 404).
   resp=$(curl -fsS -X POST "${API_URL%/}/api/v1/bundles/upload" \
     -H "Authorization: Bearer $JWT" \
-    -F "tarball=@$tarball")
+    -F "tarball=@$tarball" \
+    -F "slug=$name")
 
   # 5. Report id / version / gcs_path / control_count from the response.
   if command -v python3 >/dev/null 2>&1; then
