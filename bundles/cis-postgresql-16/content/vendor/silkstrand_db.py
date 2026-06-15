@@ -20,7 +20,9 @@ def connect_postgres(host, port, database, user, password, sslmode="prefer", tim
     prefer (default)     -> try TLS; on refusal/handshake failure, retry plaintext
     require / verify-*   -> TLS required (no fallback; the error surfaces)
     """
-    mode = (sslmode or "prefer").lower()
+    # Default only when sslmode is missing (None) — an explicit "" means "no
+    # TLS" and must NOT collapse into "prefer".
+    mode = ("prefer" if sslmode is None else sslmode).strip().lower()
 
     def _connect(ssl_context):
         return pg8000.dbapi.connect(
