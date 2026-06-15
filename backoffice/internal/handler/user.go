@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jtb75/silkstrand/backoffice/internal/audit"
 	"github.com/jtb75/silkstrand/backoffice/internal/model"
 	"github.com/jtb75/silkstrand/backoffice/internal/store"
 )
@@ -75,6 +76,16 @@ func (h *UserHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update user status")
 		return
 	}
+	action := audit.ActionUserActivate
+	if req.Status == model.UserStatusSuspended {
+		action = audit.ActionUserSuspend
+	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     action,
+		TargetType: "user",
+		TargetID:   id,
+		Metadata:   map[string]any{"status": req.Status},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -90,6 +101,11 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionUserDelete,
+		TargetType: "user",
+		TargetID:   id,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -118,6 +134,13 @@ func (h *UserHandler) UpdateMembershipStatus(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to update membership status")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionUserMembershipSet,
+		TargetType: "membership",
+		TargetID:   userID,
+		TenantID:   tenantID,
+		Metadata:   map[string]any{"user_id": userID, "status": req.Status},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -134,5 +157,12 @@ func (h *UserHandler) DeleteMembership(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to remove membership")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionUserMembershipRm,
+		TargetType: "membership",
+		TargetID:   userID,
+		TenantID:   tenantID,
+		Metadata:   map[string]any{"user_id": userID},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }

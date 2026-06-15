@@ -20,9 +20,11 @@ import (
 const (
 	// Backoffice admin
 	ActionTenantCreate      = "tenant.create"
+	ActionTenantUpdate      = "tenant.update"
 	ActionTenantDelete      = "tenant.delete"
 	ActionTenantSuspend     = "tenant.suspend"
 	ActionTenantActivate    = "tenant.activate"
+	ActionTenantRetry       = "tenant.retry"
 	ActionDCCreate          = "datacenter.create"
 	ActionDCUpdate          = "datacenter.update"
 	ActionDCDelete          = "datacenter.delete"

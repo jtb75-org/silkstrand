@@ -252,6 +252,13 @@ func (h *TenantHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionTenantUpdate,
+		TargetType: "tenant",
+		TargetID:   id,
+		TenantID:   id,
+		Metadata:   map[string]any{"name": tenant.Name},
+	})
 	writeJSON(w, http.StatusOK, tenant)
 }
 
@@ -420,5 +427,12 @@ func (h *TenantHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 	tenant.ProvisioningStatus = model.ProvisioningProvisioned
 	tenant.DCTenantID = &dcTenant.ID
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionTenantRetry,
+		TargetType: "tenant",
+		TargetID:   id,
+		TenantID:   id,
+		Metadata:   map[string]any{"name": tenant.Name},
+	})
 	writeJSON(w, http.StatusOK, tenant)
 }

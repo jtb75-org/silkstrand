@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jtb75/silkstrand/backoffice/internal/audit"
 	"github.com/jtb75/silkstrand/backoffice/internal/crypto"
 	"github.com/jtb75/silkstrand/backoffice/internal/dcclient"
 	"github.com/jtb75/silkstrand/backoffice/internal/model"
@@ -139,6 +140,12 @@ func (h *DataCenterHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionDCCreate,
+		TargetType: "data_center",
+		TargetID:   dc.ID,
+		Metadata:   map[string]any{"name": dc.Name, "region": dc.Region, "environment": dc.Environment},
+	})
 	writeJSON(w, http.StatusCreated, dc)
 }
 
@@ -211,14 +218,31 @@ func (h *DataCenterHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionDCUpdate,
+		TargetType: "data_center",
+		TargetID:   dc.ID,
+		Metadata:   map[string]any{"name": dc.Name, "region": dc.Region, "environment": dc.Environment, "status": dc.Status},
+	})
 	writeJSON(w, http.StatusOK, dc)
 }
 
 func (h *DataCenterHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Capture the name for the audit trail before deletion (best-effort).
+	var name string
+	if existing, err := h.store.GetDataCenter(r.Context(), id); err == nil && existing != nil {
+		name = existing.Name
+	}
 	if err := h.store.DeleteDataCenter(r.Context(), id); err != nil {
 		writeError(w, http.StatusNotFound, "data center not found")
 		return
 	}
+	audit.Log(r.Context(), h.store, r, audit.Entry{
+		Action:     audit.ActionDCDelete,
+		TargetType: "data_center",
+		TargetID:   id,
+		Metadata:   map[string]any{"name": name},
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
