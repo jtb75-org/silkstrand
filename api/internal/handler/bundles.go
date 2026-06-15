@@ -272,6 +272,14 @@ func (h *BundlesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	hashSum := sha256.Sum256(tarballData)
 	tarballHash := hex.EncodeToString(hashSum[:])
 
+	// The published tarball is keyed by the bundle's DIRECTORY SLUG — the
+	// build-bundle.sh arg and the mc object key (e.g. cis-postgresql-16) — not
+	// the human display name in bundle.yaml (manifest.Name, e.g. "CIS PostgreSQL
+	// 16 Benchmark", which has spaces and 404s). The publish script sends it as
+	// the `slug` form field; fall back to manifest.Name when absent (manual
+	// upload) so existing callers are unaffected.
+	publishName := resolveBundleSlug(r.FormValue("slug"), manifest.Name)
+
 	// Upload tarball to GCS if configured.
 	var gcsPath *string
 	if h.gcsBucket != "" {
@@ -284,11 +292,11 @@ func (h *BundlesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			gcsPath = &gcsURL
 			slog.Info("bundle uploaded to GCS", "url", gcsURL)
 		}
-	} else if url := bundlePublicURL(h.publicBaseURL, manifest.Name, manifest.Version); url != "" {
+	} else if url := bundlePublicURL(h.publicBaseURL, publishName, manifest.Version); url != "" {
 		// Homelab: no GCS. The publish script (scripts/publish-bundles.sh) uploads
 		// the tarball + sibling .sha256 to the public MinIO host at this exact
-		// path, so the off-cluster agent can fetch bundle_url. Mirrors the
-		// agent-release download pattern; no MinIO client in the API.
+		// path (keyed by slug), so the off-cluster agent can fetch bundle_url.
+		// Mirrors the agent-release download pattern; no MinIO client in the API.
 		gcsPath = &url
 		slog.Info("bundle public URL registered", "url", url)
 	} else {
@@ -581,6 +589,18 @@ func storeTarball(basePath, name, version string, data []byte) error {
 		return fmt.Errorf("writing tarball: %w", err)
 	}
 	return nil
+}
+
+// resolveBundleSlug picks the identifier used in the published tarball's
+// filename. The publish script sends the directory slug (= the mc object key)
+// as the `slug` form field; when present it wins, since manifest.Name is the
+// human display name (spaces → an unreachable URL). Falls back to manifest.Name
+// for manual uploads that don't send a slug.
+func resolveBundleSlug(formSlug, manifestName string) string {
+	if s := strings.TrimSpace(formSlug); s != "" {
+		return s
+	}
+	return manifestName
 }
 
 // bundlePublicURL returns the public download URL for a bundle tarball given the
