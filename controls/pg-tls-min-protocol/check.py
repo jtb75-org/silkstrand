@@ -12,10 +12,16 @@ SEVERITY = "high"
 REMEDIATION = """ALTER SYSTEM SET ssl_min_protocol_version = 'TLSv1.2';
 SELECT pg_reload_conf();"""
 
-QUERY = """SHOW ssl_min_protocol_version;"""
+QUERY = """SELECT current_setting('ssl') AS ssl,
+       current_setting('ssl_min_protocol_version') AS ssl_min_protocol_version;"""
 
 ASSERTIONS = [
-    ("ssl_min_protocol_version", "in", ["TLSv1.2","TLSv1.3"]),
+    # TLS protocol hardening is only meaningful when TLS is actually enabled.
+    # ssl_min_protocol_version is a GUC that still reads its default (TLSv1.2)
+    # even when ssl=off, so checking it alone passed vacuously on a TLS-off
+    # server — the v1.0/v1.1 "restriction" isn't enforced if no TLS is offered.
+    ("ssl", "equals", "on"),
+    ("ssl_min_protocol_version", "in", ["TLSv1.2", "TLSv1.3"]),
 ]
 
 
