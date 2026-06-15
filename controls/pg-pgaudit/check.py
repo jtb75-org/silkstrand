@@ -69,16 +69,14 @@ def main():
     username = creds.get("username") or config.get("username", "postgres")
     password = creds.get("password") or config.get("password", "")
     sslmode = config.get("sslmode", "prefer")
-    ssl_context = None if sslmode in ("disable", "allow", "") else True
-
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "bundles", "cis-postgresql-16", "content", "vendor"))
-    import pg8000.dbapi  # noqa: E402
+    from silkstrand_db import connect_postgres  # noqa: E402
 
     try:
-        conn = pg8000.dbapi.connect(
+        conn = connect_postgres(
             host=host, port=port, database=database,
             user=username, password=password,
-            ssl_context=ssl_context, timeout=10,
+            sslmode=sslmode, timeout=10,
         )
         conn.autocommit = True
     except Exception as exc:
