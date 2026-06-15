@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { ShieldAlert, ShieldCheck, EyeOff, Eye } from 'lucide-react';
@@ -35,6 +36,9 @@ const SOURCE_KINDS_BY_TAB: Record<Tab, FindingSourceKind[]> = {
 const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
 const sevRank = (s?: string) => (s ? SEV_RANK[s.toLowerCase()] ?? 0 : 0);
 
+// Valid values for the URL-backed severity filter (guards ?severity= input).
+const SEVERITY_VALUES = ['critical', 'high', 'medium', 'low', 'info'];
+
 function SeverityBadge({ severity }: { severity?: string }) {
   if (!severity) return <span className="muted">—</span>;
   return <span className={`badge badge-sev-${severity.toLowerCase()}`}>{severity}</span>;
@@ -53,7 +57,20 @@ export default function Findings() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('vulnerabilities');
 
-  const [severity, setSeverity] = useState('');
+  // Severity is URL-backed (source of truth) so Dashboard deep-links like
+  // /findings?severity=high apply the filter on mount, and changing the select
+  // stays shareable. status/collection/date stay local. (Mirrors Assets.tsx.)
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawSeverity = searchParams.get('severity') ?? '';
+  const severity = SEVERITY_VALUES.includes(rawSeverity) ? rawSeverity : '';
+  const setSeverity = (v: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (v) next.set('severity', v);
+      else next.delete('severity');
+      return next;
+    }, { replace: true });
+  };
   const [status, setStatus] = useState<FindingStatus | ''>('open');
   const [collectionId, setCollectionId] = useState('');
   const [since, setSince] = useState('');

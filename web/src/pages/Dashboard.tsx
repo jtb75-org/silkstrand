@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   getDashboardKpis,
   getSuggestedActions,
@@ -12,6 +12,19 @@ import {
   RecentActivity,
   CollectionList,
 } from '../components/DashboardWidgets';
+import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+
+// Severity heat colors. critical/medium/low/info map to semantic design tokens;
+// `high` is the one severity with no dedicated token (flagged for a future
+// severity-token addition), so it uses an orange literal that fits the ramp.
+const SEVERITY_COLOR: Record<string, string> = {
+  critical: 'var(--ss-danger)',
+  high: '#f97316',
+  medium: 'var(--ss-warning)',
+  low: 'var(--ss-info)',
+  info: 'var(--ss-text-muted)',
+};
+const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
 // Asset-first Dashboard (P5-a). Layout per docs/plans/ui-shape.md
 // § Dashboard: KPI row + 8/4 grid (Unclassified Endpoints on the left;
@@ -26,6 +39,7 @@ function formatDelta(n: number, suffix: string): string {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const kpisQ = useQuery({ queryKey: ['dashboard', 'kpis'], queryFn: getDashboardKpis });
   const actionsQ = useQuery({
     queryKey: ['dashboard', 'suggested-actions'],
@@ -46,6 +60,15 @@ export default function Dashboard() {
   });
 
   const k = kpisQ.data;
+  const severitySegments: SummarySegment[] = k
+    ? SEVERITY_ORDER.map((sev) => ({
+        key: sev,
+        label: sev.charAt(0).toUpperCase() + sev.slice(1),
+        count: k.findings_by_severity?.[sev] ?? 0,
+        color: SEVERITY_COLOR[sev],
+        onClick: () => navigate(`/findings?severity=${sev}`),
+      }))
+    : [];
   const rows =
     unclassifiedQ.data?.items.slice(0, 5).map((a) => ({
       id: a.id,
@@ -94,6 +117,17 @@ export default function Dashboard() {
           delta={k ? formatDelta(k.deltas.unresolved_new_week, 'unresolved') : undefined}
         />
       </div>
+
+      <section style={{ marginBottom: 'var(--ss-space-lg)' }}>
+        <h2 style={{ fontSize: 'var(--ss-text-h3)', marginBottom: 'var(--ss-space-sm)' }}>
+          Findings by severity
+        </h2>
+        {kpisQ.isLoading ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <SummaryChips variant="bar" segments={severitySegments} emptyText="No open findings." />
+        )}
+      </section>
 
       <div className="dash-grid">
         <div>
