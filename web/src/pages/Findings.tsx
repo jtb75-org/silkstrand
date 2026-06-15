@@ -6,6 +6,7 @@ import { ShieldAlert, ShieldCheck, EyeOff, Eye } from 'lucide-react';
 import {
   listFindings,
   getFinding,
+  getFindingsSeveritySummary,
   suppressFinding,
   reopenFinding,
   listCollections,
@@ -18,6 +19,16 @@ import type {
 } from '../api/types';
 import DataTable from '../components/DataTable';
 import CodeBlock from '../components/CodeBlock';
+import SummaryChips, { type SummarySegment } from '../components/SummaryChips';
+
+// Severity heat colors (mirrors the Dashboard; `high` has no semantic token).
+const SEVERITY_COLOR: Record<string, string> = {
+  critical: 'var(--ss-danger)',
+  high: '#f97316',
+  medium: 'var(--ss-warning)',
+  low: 'var(--ss-info)',
+  info: 'var(--ss-text-muted)',
+};
 
 type Tab = 'vulnerabilities' | 'compliance';
 
@@ -113,6 +124,35 @@ export default function Findings() {
     queryKey: ['findings', params],
     queryFn: () => listFindings(params),
   });
+
+  // Severity summary — the SAME filters EXCEPT severity (the chips ARE the
+  // per-severity breakdown). Computed server-side over the full filtered set,
+  // so counts are complete (not the 200-row list cap). Refetches on
+  // tab/status/collection/date — not when only the severity filter changes.
+  const summaryParams = useMemo(() => ({
+    source_kind: SOURCE_KINDS_BY_TAB[tab],
+    status: (status || undefined) as FindingStatus | undefined,
+    collection_id: collectionId || undefined,
+    since: since || undefined,
+    until: until || undefined,
+  }), [tab, status, collectionId, since, until]);
+
+  const { data: severitySummary } = useQuery({
+    queryKey: ['findings-severity-summary', summaryParams],
+    queryFn: () => getFindingsSeveritySummary(summaryParams),
+  });
+
+  const SEVERITY_KEYS = ['critical', 'high', 'medium', 'low', 'info'] as const;
+  const severitySegments: SummarySegment[] = severitySummary
+    ? SEVERITY_KEYS.map((sev) => ({
+        key: sev,
+        label: sev.charAt(0).toUpperCase() + sev.slice(1),
+        count: severitySummary[sev],
+        color: SEVERITY_COLOR[sev],
+        // Toggle the URL-backed severity filter (#435): click active → clear.
+        onClick: () => setSeverity(severity === sev ? '' : sev),
+      }))
+    : [];
 
   const suppressMut = useMutation({
     mutationFn: (id: string) => suppressFinding(id),
@@ -312,6 +352,12 @@ export default function Findings() {
           <input id="f-until" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
         </div>
       </div>
+
+      {severitySummary && (
+        <div style={{ marginBottom: 'var(--ss-space-md)' }}>
+          <SummaryChips variant="chips" segments={severitySegments} emptyText="No open findings." />
+        </div>
+      )}
 
       {isLoading && <p>Loading…</p>}
       {error && <p className="error">Failed to load: {(error as Error).message}</p>}

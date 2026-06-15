@@ -230,6 +230,7 @@ type Store interface {
 
 	UpsertFinding(ctx context.Context, in UpsertFindingInput) (*model.Finding, error)
 	ListFindings(ctx context.Context, f FindingFilter) ([]model.Finding, error)
+	FindingsSeveritySummary(ctx context.Context, f FindingFilter) (map[string]int, error)
 	GetFindingByID(ctx context.Context, id string) (*model.Finding, error)
 	SetFindingStatus(ctx context.Context, id, status string) error
 
@@ -375,6 +376,7 @@ type UpsertFindingInput struct {
 // FindingFilter is the parsed query for ListFindings.
 type FindingFilter struct {
 	SourceKind      string
+	SourceKinds     []string // OR-match multiple source kinds (e.g. the compliance tab); takes precedence over SourceKind
 	Source          string
 	Severity        string
 	Status          string
